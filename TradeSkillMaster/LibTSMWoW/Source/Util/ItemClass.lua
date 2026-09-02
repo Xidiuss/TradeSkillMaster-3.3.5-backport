@@ -12,6 +12,7 @@ local private = {
 	subClasses = {},
 	classLookup = {},
 	classIdLookup = {},
+	subClassInfo = {},
 	inventorySlotIdLookup = {},
 	armorSubClassHasInventorySlots = {},
 	armorGenericInventorySlots = {},
@@ -124,6 +125,25 @@ local ARMOR_SUB_CLASSES_WITH_INVENTORY_SLOTS = {
 
 
 -- ============================================================================
+-- Private Helper Functions
+-- ============================================================================
+
+function private.GetClassicAuctionClassIndex(className)
+	local classIndex = 1
+	while true do
+		local name = select(classIndex, GetAuctionItemClasses())
+		if not name then
+			return nil
+		elseif name == className then
+			return classIndex
+		end
+		classIndex = classIndex + 1
+	end
+end
+
+
+
+-- ============================================================================
 -- Module Loading
 -- ============================================================================
 
@@ -161,17 +181,22 @@ ItemClass:OnModuleLoad(function()
 					end
 				end
 			else
-				-- 3.3.5a: GetAuctionItemSubClasses(classId) takes a 1-based AH *position* (not the
-				-- modern Enum class id) and returns subclass *names*, so feeding the Enum class id and
-				-- treating the result as ids gave subclasses from the wrong class (e.g. Container showed
-				-- Bows/Crossbows). Build straight from Enum.__ItemClassInfo, which is keyed by the real
-				-- Enum subclass id -> localized name, so the dropdown and the GetSubClassId filter agree.
-				local subClassInfo = Enum.__ItemClassInfo and Enum.__ItemClassInfo[classId]
-				if subClassInfo then
-					for subClassId, subClassName in pairs(subClassInfo) do
-						if subClassName and not strfind(subClassName, "(OBSOLETE)") then
-							private.classLookup[class][subClassName] = subClassId
+				-- 3.3.5 uses 1-based AH positions for classes and subclasses. Resolve the active
+				-- provider's class ID to an AH position by name, then keep subclass IDs positional.
+				local classIndex = private.GetClassicAuctionClassIndex(class)
+				if classIndex then
+					private.subClassInfo[classId] = {}
+					local subClassId = 1
+					while true do
+						local subClassName = select(subClassId, GetAuctionItemSubClasses(classIndex))
+						if not subClassName then
+							break
 						end
+						if not strfind(subClassName, "(OBSOLETE)") then
+							private.classLookup[class][subClassName] = subClassId
+							private.subClassInfo[classId][subClassId] = subClassName
+						end
+						subClassId = subClassId + 1
 					end
 				end
 			end
@@ -252,8 +277,21 @@ ItemClass:OnModuleLoad(function()
 		tinsert(private.armorInventorySlots, ItemClass.GetInventorySlotInfo(id))
 	end
 
-	for _, subClassId in ipairs(ARMOR_SUB_CLASSES_WITH_INVENTORY_SLOTS) do
-		private.armorSubClassHasInventorySlots[ItemClass.GetSubClassInfo(Enum.ItemClass.Armor, subClassId)] = true
+	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
+		for _, subClassId in ipairs(ARMOR_SUB_CLASSES_WITH_INVENTORY_SLOTS) do
+			private.armorSubClassHasInventorySlots[ItemClass.GetSubClassInfo(Enum.ItemClass.Armor, subClassId)] = true
+		end
+	else
+		-- Classic AH positions 2-5 are Cloth, Leather, Mail, and Plate.
+		local armorSubClassInfo = private.subClassInfo[Enum.ItemClass.Armor]
+		if armorSubClassInfo then
+			for subClassId = 2, 5 do
+				local subClassName = armorSubClassInfo[subClassId]
+				if subClassName then
+					private.armorSubClassHasInventorySlots[subClassName] = true
+				end
+			end
+		end
 	end
 end)
 
@@ -272,6 +310,12 @@ end
 ---Gets the name of the item subtype.
 ---@return string
 function ItemClass.GetSubClassInfo(classId, subClassId)
+	if not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
+		local subClassInfo = private.subClassInfo[classId]
+		if subClassInfo and subClassInfo[subClassId] then
+			return subClassInfo[subClassId]
+		end
+	end
 	return C_Item.GetItemSubClassInfo(classId, subClassId)
 end
 

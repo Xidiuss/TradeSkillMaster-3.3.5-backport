@@ -33,6 +33,11 @@ local private = {
 	-- 3.3.5 buyout-drop fix: GetTime() of the last auction query, used by the find
 	-- thread to wait out the server-side PlaceAuctionBid throttle before bidding.
 	lastQueryTime = 0,
+	-- 3.3.5: whether the client received "owner" auction list data during this
+	-- AH session. GetNumAuctionItems("owner") returns 0 until the server sends
+	-- the list, so a scan which runs earlier would wipe the persisted auction
+	-- quantities with an empty result.
+	ownedListLoaded = false,
 }
 AuctionHouse.DURATIONS = {
 	not LibTSMWoW.IsVanillaClassic() and AUCTION_DURATION_ONE or gsub(AUCTION_DURATION_ONE, "12", "2"),
@@ -80,6 +85,13 @@ AuctionHouse:OnModuleLoad(function()
 		-- PlaceAuctionBid throttle (~2s after any query) before bidding into the
 		-- current page. See AuctionHouse.GetTimeSinceLastQuery().
 		hooksecurefunc("QueryAuctionItems", private.QueryAuctionItemsHook)
+		-- 3.3.5: track owner-list availability. The owner list starts empty each AH
+		-- session and is only populated once the client receives the server's data
+		-- (Auctions tab shown, or a server push after posting/canceling). Scanning
+		-- before that would wipe the persisted auction quantities with an empty
+		-- result - see OwnedFullyLoaded().
+		Event.Register("AUCTION_HOUSE_SHOW", function() private.ownedListLoaded = false end)
+		Event.Register("AUCTION_OWNED_LIST_UPDATE", function() private.ownedListLoaded = true end)
 	end
 end)
 
@@ -102,7 +114,14 @@ end
 ---Returns whether or not the owned auctions are fully loaded.
 ---@return boolean
 function AuctionHouse.OwnedFullyLoaded()
-	return not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) or C_AuctionHouse.HasFullOwnedAuctionResults()
+	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
+		return C_AuctionHouse.HasFullOwnedAuctionResults()
+	end
+	-- 3.3.5: no API to query the load state of the owner list, so treat it as
+	-- loaded only once the client received owner-list data this AH session (via
+	-- AUCTION_OWNED_LIST_UPDATE) or already has a non-empty cached list. This is
+	-- what prevents an empty-list scan from wiping the persisted quantities.
+	return private.ownedListLoaded or AuctionHouse.GetNumOwned() > 0
 end
 
 ---Returns whether or not owned auctions are sorted by owner/duration (not available with C_AuctionHouse).

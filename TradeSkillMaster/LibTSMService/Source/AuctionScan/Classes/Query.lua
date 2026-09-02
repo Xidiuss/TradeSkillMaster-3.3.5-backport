@@ -25,6 +25,8 @@ local private = {
 local ITEM_SPECIFIC = newproxy()
 local ITEM_BASE = newproxy()
 local FILTER_NOT_SET = newproxy()
+local SCAN_PLAN_KINDS = { EXACT = true, NARROW = true, CATEGORY = true }
+local BROWSE_END_REASONS = { FULL = true, COST_SWITCH = true, EARLY = true, INCOMPLETE = true }
 
 
 
@@ -70,7 +72,10 @@ function AuctionQuery:__init()
 	self._items = {}
 	self._customFilters = {}
 	self._isBrowseDoneFunc = nil
+	self._scanPlanKind = nil
+	self._fallbackParent = nil
 	self._browseEndedEarly = false
+	self._endReason = nil
 	self._specifiedPage = nil
 	self._resolveSellers = false
 	self._callback = nil
@@ -80,6 +85,10 @@ function AuctionQuery:__init()
 	self._accumulate = false
 	self._useGetAll = false
 	self._usePriceSort = false
+	self._priceSortBroken = false
+	self._priceSortMaxUnitSeen = nil
+	self._buyoutOrderBroken = false
+	self._buyoutSortMaxSeen = nil
 	self._traceTag = nil
 	self._tStart = nil
 	self._tFirstPage = nil
@@ -88,6 +97,7 @@ function AuctionQuery:__init()
 	self._tPageQuerySent = nil
 	self._lastPagePrinted = -1
 	self._lastPageFingerprint = nil
+	self._lastPageFingerprintPage = nil
 	self._incrementalFilter = false
 	self._dirtyRows = {}
 end
@@ -118,7 +128,10 @@ function AuctionQuery:_Release()
 	wipe(self._items)
 	wipe(self._customFilters)
 	self._isBrowseDoneFunc = nil
+	self._scanPlanKind = nil
+	self._fallbackParent = nil
 	self._browseEndedEarly = false
+	self._endReason = nil
 	self._specifiedPage = nil
 	self._resolveSellers = false
 	self._callback = nil
@@ -131,6 +144,10 @@ function AuctionQuery:_Release()
 	self._accumulate = false
 	self._useGetAll = false
 	self._usePriceSort = false
+	self._priceSortBroken = false
+	self._priceSortMaxUnitSeen = nil
+	self._buyoutOrderBroken = false
+	self._buyoutSortMaxSeen = nil
 	self._traceTag = nil
 	self._tStart = nil
 	self._tFirstPage = nil
@@ -139,6 +156,7 @@ function AuctionQuery:_Release()
 	self._tPageQuerySent = nil
 	self._lastPagePrinted = -1
 	self._lastPageFingerprint = nil
+	self._lastPageFingerprintPage = nil
 	self._incrementalFilter = false
 	wipe(self._dirtyRows)
 end
@@ -299,11 +317,71 @@ function AuctionQuery:AddCustomFilter(func)
 end
 
 ---Sets a function to call for checking if we're done with a browse query.
----@param func fun(query: AuctionQuery): boolean
+---@param func fun(query: AuctionQuery): boolean, string? The optional reason must be one of the browse end reasons.
 ---@return AuctionQuery
 function AuctionQuery:SetIsBrowseDoneFunction(func)
 	self._isBrowseDoneFunc = func
 	return self
+end
+
+---Sets this query's role in a classic scan plan.
+---@param kind "EXACT"|"NARROW"|"CATEGORY"
+---@return AuctionQuery
+function AuctionQuery:SetScanPlanKind(kind)
+	assert(SCAN_PLAN_KINDS[kind], "Invalid scan plan kind: "..tostring(kind))
+	self._scanPlanKind = kind
+	return self
+end
+
+---Gets this query's role in a classic scan plan.
+---@return "EXACT"|"NARROW"|"CATEGORY"|nil
+function AuctionQuery:GetScanPlanKind()
+	return self._scanPlanKind
+end
+
+---Sets the query whose incomplete result causes this query to run.
+---@param query AuctionQuery
+---@return AuctionQuery
+function AuctionQuery:SetFallbackParent(query)
+	assert(query and query ~= self)
+	self._fallbackParent = query
+	return self
+end
+
+---Gets this query's direct fallback parent.
+---@return AuctionQuery?
+function AuctionQuery:GetFallbackParent()
+	return self._fallbackParent
+end
+
+---Returns whether the browse reached a proven natural end.
+---@return boolean
+function AuctionQuery:HasCompletedFullBrowse()
+	return self._endReason == "FULL"
+end
+
+---Returns whether the browse terminated without reaching a proven natural end.
+---@return boolean
+function AuctionQuery:HasEndedEarly()
+	return self._browseEndedEarly
+end
+
+---Gets the terminal reason for the most recent browse.
+---@return "FULL"|"COST_SWITCH"|"EARLY"|"INCOMPLETE"|nil
+function AuctionQuery:GetEndReason()
+	return self._endReason
+end
+
+---Gets the highest total auction count observed during the browse.
+---@return number
+function AuctionQuery:GetMaxTotalSeen()
+	return self._maxTotalSeen
+end
+
+---Gets the current zero-based classic browse page.
+---@return number
+function AuctionQuery:GetPage()
+	return self._page
 end
 
 ---Sets the page to query for.
@@ -343,6 +421,32 @@ end
 function AuctionQuery:SetUsePriceSort(usePriceSort)
 	self._usePriceSort = usePriceSort and true or false
 	return self
+end
+---Returns whether browse results are sorted by unit price (classic).
+---With price-ascending pages the first subrow seen for an item is its cheapest
+---auction, which is what lets scan-done checks conclude early. The Scanner
+---verifies the ordering while pages arrive (see _RecordBrowseUnitPrice) and
+---marks the sort broken if a cheaper row shows up after a pricier one, at which
+---point early-stop conclusions are no longer safe.
+---@return boolean
+function AuctionQuery:IsPriceSorted()
+	return self._usePriceSort and not self._priceSortBroken
+end
+
+---Returns whether the browse rows arrived in non-decreasing STACK BUYOUT order
+---(classic). Note this is a different property than unit-price order: with
+---mixed stack sizes, buyout can be ascending while unit price dips. A verified
+---buyout order is the foundation for the bounded early-stop (future rows have
+---buyout >= maxSeen, so their unit price is at least maxSeen / maxStack).
+---@return boolean
+function AuctionQuery:IsBuyoutOrdered()
+	return not self._buyoutOrderBroken
+end
+
+---Returns the highest stack buyout seen so far (classic), for lower-bound math.
+---@return number?
+function AuctionQuery:GetMaxBuyoutSeen()
+	return self._buyoutSortMaxSeen
 end
 ---Sets whether browse results accumulate across repeated browses instead of being
 ---wiped before each one. Used by the classic Sniper so found lots persist in the
@@ -385,6 +489,19 @@ end
 ---Starts the browse query.
 ---@return Future
 function AuctionQuery:Browse()
+	-- A query object may be browsed again after a pause or by a reusable scan.
+	-- Terminal state and pagination evidence belong to one browse attempt only.
+	self._browseEndedEarly = false
+	self._endReason = nil
+	self._page = 0
+	self._maxTotalSeen = 0
+	self._lastPageFingerprint = nil
+	self._lastPageFingerprintPage = nil
+	self._lastPagePrinted = -1
+	self._priceSortBroken = false
+	self._priceSortMaxUnitSeen = nil
+	self._buyoutOrderBroken = false
+	self._buyoutSortMaxSeen = nil
 	-- 3.3.5: очищаем stale subRows перед новым browse (чтобы UI не показывал старые лоты)
 	-- Sniper accumulate mode (SetAccumulate) skips this wipe so found lots persist
 	-- in the list across rescans instead of vanishing each pass.
@@ -591,6 +708,49 @@ function AuctionQuery:_SetSort()
 	return AuctionHouseWrapper.SetSort(self._usePriceSort or type(self._specifiedPage) == "string", self._usePriceSort)
 end
 
+---Records the unit and stack buyout of a browse row so the ordering of the pages
+---can be verified (classic). Two independent properties are tracked:
+---  * UNIT order: every row's unit price must be >= the max unit price seen so
+---    far. A violation revokes IsPriceSorted() (first-seen is no longer the
+---    cheapest) and the scan falls back to full pagination.
+---  * BUYOUT order: every row's stack buyout must be >= the max buyout seen so
+---    far. A violation means the core does not honor the requested buyout sort
+---    at all, which rules out any bounded early-stop on this core.
+---@param unitBuyout number The per-unit buyout of the row (stack buyout / stack size)
+---@param buyout number The stack buyout of the row
+function AuctionQuery:_RecordBrowseUnitPrice(unitBuyout, buyout)
+	if buyout and buyout > 0 then
+		local maxBuyout = self._buyoutSortMaxSeen
+		if maxBuyout and buyout < maxBuyout - 0.0001 then
+			if not self._buyoutOrderBroken then
+				self._buyoutOrderBroken = true
+				if _G.TSM_SCAN_TRACE then
+					local message = ("[TSM ScanTrace] BUYOUT order VIOLATED at page %d (buyout %.4g < previous max %.4g) - core does not honor buyout sort"):format((self._page or 0), buyout, maxBuyout)
+					TSMDBG.PriceLogTrace(message)
+				end
+			end
+		else
+			if not maxBuyout or buyout > maxBuyout then
+				self._buyoutSortMaxSeen = buyout
+			end
+		end
+	end
+	if not self._usePriceSort or self._priceSortBroken or not unitBuyout or unitBuyout <= 0 then
+		return
+	end
+	local maxSeen = self._priceSortMaxUnitSeen
+	if maxSeen and unitBuyout < maxSeen - 0.0001 then
+		self._priceSortBroken = true
+		self._priceSortMaxUnitSeen = nil
+		if _G.TSM_SCAN_TRACE then
+			local message = ("[TSM ScanTrace] UNIT price order VIOLATED at page %d (unit %.4g < previous max %.4g) - first-seen is not necessarily cheapest"):format((self._page or 0), unitBuyout, maxSeen)
+			TSMDBG.PriceLogTrace(message)
+		end
+		return
+	end
+	self._priceSortMaxUnitSeen = unitBuyout
+end
+
 function AuctionQuery:_SendWowQuery()
 	local minLevel = self._minLevel ~= -math.huge and self._minLevel or nil
 	local maxLevel = self._maxLevel ~= math.huge and self._maxLevel or nil
@@ -749,12 +909,23 @@ function AuctionQuery:_IsFiltered(row, isSubRow, itemKey)
 end
 
 function AuctionQuery:_BrowseIsDone(isRetry)
+	if self._endReason then
+		return true
+	end
 	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
-		if self._isBrowseDoneFunc and self:_isBrowseDoneFunc() then
-			self._browseEndedEarly = true
+		local isDone, reason = false, nil
+		if self._isBrowseDoneFunc then
+			isDone, reason = self:_isBrowseDoneFunc()
+		end
+		if isDone then
+			self:_SetBrowseEndReason(reason or "EARLY")
 			return true
 		end
-		return AuctionHouse.HasFullBrowseResults()
+		if AuctionHouse.HasFullBrowseResults() then
+			self:_SetBrowseEndReason("FULL")
+			return true
+		end
+		return false
 	else
 		-- 3.3.5: последняя страница определяется тем что на ней < NUM_AUCTION_ITEMS_PER_PAGE
 		-- (totalNumAuctions от Blizzard ненадёжный — может возвращать 0 или накопительно)
@@ -762,16 +933,20 @@ function AuctionQuery:_BrowseIsDone(isRetry)
 		local numAuctions, totalNumAuctions = GetNumAuctionItems("list")
 		numAuctions = numAuctions or 0
 		totalNumAuctions = totalNumAuctions or 0
+		if totalNumAuctions > (self._maxTotalSeen or 0) then
+			self._maxTotalSeen = totalNumAuctions
+		end
 		if self._specifiedPage then
 			if isRetry then
 				return false
 			end
 			local numPages = math.max(1, math.ceil(totalNumAuctions / NUM_AUCTION_ITEMS_PER_PAGE))
 			local specifiedPage = (self._specifiedPage == "FIRST" and 0) or (self._specifiedPage == "LAST" and numPages - 1) or self._specifiedPage
-			return self._page == specifiedPage
-		elseif self._isBrowseDoneFunc and self:_isBrowseDoneFunc() then
-			self._browseEndedEarly = true
-			return true
+			if self._page == specifiedPage then
+				self:_SetBrowseEndReason("EARLY")
+				return true
+			end
+			return false
 		else
 			-- AUX-стиль: эта страница последняя, если на ней < 50 (или 0) аукционов
 			-- 3.3.5: totalNumAuctions ненадёжный (может быть 0 или неправильный), поэтому полагаемся только на pageIsLast
@@ -782,6 +957,7 @@ function AuctionQuery:_BrowseIsDone(isRetry)
 					print(string.format("|cFFFFA500TSM DE Scan:|r query=%s DONE getAll pages=%d auctions=%d elapsed=%.2fs",
 						tostring(self._traceTag), self._pageCount or 1, numAuctions, GetTime() - self._tStart))
 				end
+				self:_SetBrowseEndReason("FULL")
 				return true
 			end
 			local pageIsLast = numAuctions < NUM_AUCTION_ITEMS_PER_PAGE
@@ -792,12 +968,6 @@ function AuctionQuery:_BrowseIsDone(isRetry)
 				pageFingerprint = tostring(firstLink or "") .. "|" .. tostring(lastLink or "") .. "|" .. tostring(numAuctions)
 			else
 				pageFingerprint = "0"
-			end
-			-- Memoize peak totalNumAuctions: on 3.3.5 it can transiently be 0 or
-			-- swing low between pages, but it does monotonically converge to the
-			-- real AH total. Peak value is a safe upper bound.
-			if totalNumAuctions > (self._maxTotalSeen or 0) then
-				self._maxTotalSeen = totalNumAuctions
 			end
 			-- Page-cap: when server has run out of real auctions but keeps echoing
 			-- a full page (numAuctions stays at 50), pageIsLast never trips.
@@ -810,7 +980,7 @@ function AuctionQuery:_BrowseIsDone(isRetry)
 					cappedDone = true
 				end
 			end
-			local repeatedPage = self._page > 0 and self._lastPageFingerprint and self._lastPageFingerprint == pageFingerprint and numAuctions >= NUM_AUCTION_ITEMS_PER_PAGE and totalNumAuctions <= 0
+			local repeatedPage = self._page > 0 and self._lastPageFingerprintPage == self._page - 1 and self._lastPageFingerprint == pageFingerprint and numAuctions >= NUM_AUCTION_ITEMS_PER_PAGE and totalNumAuctions <= 0
 			local done = pageIsLast or cappedDone or repeatedPage
 			if TSMDBG then TSMDBG.Log("Query", "_BrowseIsDone classic page=%d num=%d total=%d maxTotal=%d pageIsLast=%s cappedDone=%s repeatedPage=%s done=%s",
 				self._page, numAuctions, totalNumAuctions, self._maxTotalSeen, tostring(pageIsLast), tostring(cappedDone), tostring(repeatedPage), tostring(done)) end
@@ -831,6 +1001,21 @@ function AuctionQuery:_BrowseIsDone(isRetry)
 					serverTime, numAuctions, self._maxTotalSeen))
 			end
 			self._lastPageFingerprint = pageFingerprint
+			self._lastPageFingerprintPage = self._page
+			if repeatedPage then
+				self:_SetBrowseEndReason("INCOMPLETE")
+			elseif pageIsLast or cappedDone then
+				self:_SetBrowseEndReason("FULL")
+			else
+				local callbackDone, reason = false, nil
+				if self._isBrowseDoneFunc then
+					callbackDone, reason = self:_isBrowseDoneFunc()
+				end
+				if callbackDone then
+					self:_SetBrowseEndReason(reason or "EARLY")
+					done = true
+				end
+			end
 			if done and self._traceTag and self._tStart then
 				local elapsed = GetTime() - self._tStart
 				local pageAvg = self._pageCount and self._pageCount > 0 and elapsed / self._pageCount or 0
@@ -841,6 +1026,15 @@ function AuctionQuery:_BrowseIsDone(isRetry)
 			return done
 		end
 	end
+end
+
+function AuctionQuery:_SetBrowseEndReason(reason)
+	assert(BROWSE_END_REASONS[reason], "Invalid browse end reason: "..tostring(reason))
+	if self._endReason then
+		return
+	end
+	self._endReason = reason
+	self._browseEndedEarly = reason ~= "FULL"
 end
 
 function AuctionQuery:_BrowseIsPageValid()

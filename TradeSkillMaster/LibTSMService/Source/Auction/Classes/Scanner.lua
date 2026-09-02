@@ -231,10 +231,6 @@ function private.ScanTimerHandler()
 	if not DefaultUI.IsAuctionHouseVisible() then
 		-- AH not visible, so can't scan
 		return
-	elseif DefaultUI.IsDefaultOwnedAuctionTabVisible() then
-		-- Default UI auctions tab is visible, so scan later
-		private.scanTimer:RunForFrames(2)
-		return
 	elseif not AuctionHouse.OwnedFullyLoaded() then
 		-- Don't have all the results yet, so try again in a moment
 		private.scanTimer:RunForFrames(2)
@@ -242,7 +238,11 @@ function private.ScanTimerHandler()
 	end
 
 	-- Check if we need to change the sort
-	if not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) and not AuctionHouse.AreOwnedSortedByOwnerDuration() then
+	-- 3.3.5: the scan itself only reads the owner list, so it can safely run while
+	-- the default UI auctions tab is visible (that tab is also what loads the owner
+	-- list); only the re-sort is skipped then to avoid reshuffling the list the
+	-- player is looking at.
+	if not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) and not DefaultUI.IsDefaultOwnedAuctionTabVisible() and not AuctionHouse.AreOwnedSortedByOwnerDuration() then
 		Log.Info("Sorting owner auctions")
 		-- Ignore events while changing the sort
 		private.ignoreUpdateEvent = true

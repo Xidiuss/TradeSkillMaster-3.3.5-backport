@@ -1423,9 +1423,6 @@ L["Your min restock (%s) is invalid for %s."] = "Your min restock (%s) is invali
 L["Your restock quantity (%s) is invalid for %s."] = "Your restock quantity (%s) is invalid for %s."
 L["Your task list is currently empty."] = "Your task list is currently empty."
 L["ilvl"] = "ilvl"
--- LOCALE STRINGS END HERE
-
-TSM.Locale.SetTable(L)
 
 -- 3.3.5a Backport & Auction UI Additions
 L["Abort"] = "Abort"
@@ -1477,3 +1474,6 @@ L["The font used throughout TSM. Default uses bundled fonts or your UI addon's f
 L["The selected groups don't contain any items."] = "The selected groups don't contain any items."
 L["The size of item icons shown in TSM lists and tables."] = "The size of item icons shown in TSM lists and tables."
 L["Typography"] = "Typography"
+-- LOCALE STRINGS END HERE
+
+TSM.Locale.SetTable(L)

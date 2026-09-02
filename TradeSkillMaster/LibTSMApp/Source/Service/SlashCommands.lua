@@ -87,12 +87,12 @@ function private.OnChatCommand(input)
 			else
 				_G.TSM_GLOBAL_DEBUG = not _G.TSM_GLOBAL_DEBUG
 			end
-			ChatMessage.PrintfUserRaw("|cffffaa00[TSM Debug]|r 调试模式: %s (所有报错均在可复制窗口弹出, 支持 /tsm debug error 测试)", _G.TSM_GLOBAL_DEBUG and "|cff00ff00已开启 (ON)|r" or "|cffff0000已关闭 (OFF)|r")
+			ChatMessage.PrintfUserRaw("|cffffaa00[TSM Debug]|r Debug mode: %s (all errors open in a copyable window; use /tsm debug error to test)", _G.TSM_GLOBAL_DEBUG and "|cff00ff00ON|r" or "|cffff0000OFF|r")
 			return
 		end
 		local info = private.debugCommandInfo[subCmd]
 		if not info then
-			ChatMessage.PrintfUserRaw("|cffffaa00[TSM Debug]|r 可用指令: /tsm debug [on|off|error]")
+			ChatMessage.PrintfUserRaw("|cffffaa00[TSM Debug]|r Available commands: /tsm debug [on|off|error]")
 			return
 		end
 		info.callback(subArgs)

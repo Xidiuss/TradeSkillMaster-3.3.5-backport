@@ -30,6 +30,10 @@ local CustomPrice = TSM.LibTSMApp:Include("Service.CustomPrice")
 local Conversions = TSM.LibTSMApp:Include("Service.Conversions")
 local Auction = TSM.LibTSMService:Include("Auction")
 local BagTracking = TSM.LibTSMService:Include("Inventory.BagTracking")
+local Mail = TSM.LibTSMService:Include("Mail")
+local Inventory = TSM.LibTSMApp:Include("Service.Inventory")
+local AltTracking = TSM.LibTSMApp:Include("Service.AltTracking")
+local OperationUtil = TSM.LibTSMSystem:Include("Operation.Util")
 local CraftingOperation = TSM.LibTSMSystem:Include("CraftingOperation")
 local private = {
 	settings = nil,
@@ -65,6 +69,8 @@ function Crafting.OnInitialize(settingsDB)
 		:AddKey("factionrealm", "internalData", "crafts")
 		:AddKey("factionrealm", "internalData", "mats")
 		:AddKey("global", "craftingOptions", "defaultCraftPriceMethod")
+		:AddKey("global", "craftingOptions", "ignoreCharacters")
+		:AddKey("global", "craftingOptions", "ignoreGuilds")
 		:AddKey("factionrealm", "userData", "craftingCooldownIgnore")
 	local used = TempTable.Acquire()
 	for craftString, craftInfo in pairs(private.settings.crafts) do
@@ -983,4 +989,88 @@ function private.IsCraftStringHigherProfit(craftingCost, profit, hasCD, bestCraf
 	end
 	-- Stick with what we have
 	return false
+end
+
+
+
+-- ============================================================================
+-- Debug Slash Command
+-- ============================================================================
+
+-- Dumps the full restock quantity chain for one item so the exact broken link
+-- (stale data layer vs stale CustomString cache vs restock operation settings)
+-- can be identified at runtime instead of guessing. The restock queue reads
+-- CustomString's cached "NumInventory" value, while the item tooltip reads the
+-- inventory sources directly, so both are printed next to each other.
+-- Usage: /tsmcraftdebug <itemLink|itemID|itemString>
+SLASH_TSMCRAFTDEBUG1 = "/tsmcraftdebug"
+SlashCmdList["TSMCRAFTDEBUG"] = function(msg)
+	msg = strtrim(msg or "")
+	if msg == "" then
+		print("Usage: /tsmcraftdebug <itemLink|itemID|itemString> | trace | scantrace")
+		return
+	end
+	if strlower(msg) == "trace" then
+		_G.TSM_CRAFT_TRACE = not _G.TSM_CRAFT_TRACE
+		print("TSMCraftDebug: restock trace "..(_G.TSM_CRAFT_TRACE and "ENABLED (run Restock Groups and watch for [TSM RestockTrace] lines)" or "disabled"))
+		return
+	end
+	if strlower(msg) == "scantrace" then
+		_G.TSM_SCAN_TRACE = not _G.TSM_SCAN_TRACE
+		if _G.TSM_SCAN_TRACE and _G.TSMDBG and _G.TSMDBG.PriceLogReset then
+			_G.TSMDBG.PriceLogReset()
+		end
+		if _G.TSM_SCAN_TRACE then
+			print("TSMCraftDebug: scan trace ENABLED; logs reset (POST: TSM_PostScan.lua, CANCEL: TSM_CancelScan.lua; run scans, then /reload)")
+			local missing = _G.TSMDBG and _G.TSMDBG.GetMissingPriceLogModules and _G.TSMDBG.GetMissingPriceLogModules()
+			if missing then
+				print("TSMCraftDebug: WARNING - enable companion addon(s) and /reload: "..missing.." (without them these logs will not be saved after /reload)")
+			end
+		else
+			print("TSMCraftDebug: scan trace disabled")
+		end
+		return
+	end
+	local itemString = ItemString.Get(msg)
+	if not itemString then
+		local id = tonumber(msg)
+		if id then
+			itemString = ItemString.Get("i:"..id)
+		end
+	end
+	if not itemString then
+		print("TSMCraftDebug: unrecognized item: "..msg)
+		return
+	end
+	local bag = BagTracking.GetBagQuantity(itemString)
+	local bank = BagTracking.GetBankQuantity(itemString)
+	local mail = Mail.GetQuantity(itemString)
+	local auction = Auction.GetQuantity(itemString)
+	local altInventory, altAuction = AltTracking.GetQuantity(itemString)
+	local freshTotal = Inventory.GetTotalQuantity(itemString)
+	local cachedValue = CustomString.GetSourceValue("NumInventory", itemString)
+	CustomString.InvalidateCache("NumInventory", itemString)
+	local invalidatedValue = CustomString.GetSourceValue("NumInventory", itemString)
+	local opSettings, opName = OperationUtil.GetFirstOperationByItem("Crafting", itemString)
+	print("=== TSMCraftDebug: "..itemString.." ===")
+	print(("data layer: bag=%d bank=%d mail=%d ah=%d altInv=%d altAH=%d"):format(bag, bank, mail, auction, altInventory, altAuction))
+	print(("fresh NumInventory=%d | cached NumInventory=%s | after invalidate=%s"):format(freshTotal, tostring(cachedValue), tostring(invalidatedValue)))
+	if cachedValue ~= nil and cachedValue ~= freshTotal then
+		print(">>> CACHE IS STALE: the invalidation callback never fired for this item - restock used the outdated value")
+	end
+	print(("restock queue num: with cached value=%d | with fresh value=%d"):format(CraftingOperation.GetRestockQuantity(itemString, cachedValue or 0), CraftingOperation.GetRestockQuantity(itemString, freshTotal)))
+	if opSettings then
+		print(("operation '%s': minRestock=%s maxRestock=%s (needed = maxRestock - owned, queued only if >= minRestock)"):format(tostring(opName), tostring(opSettings.minRestock), tostring(opSettings.maxRestock)))
+	else
+		print("operation: NONE (item is not in a group with a Crafting operation)")
+	end
+	print(("group: %s"):format(tostring(Group.GetPathByItem(itemString))))
+	local ignoredChars = TempTable.Acquire()
+	for player, ignored in pairs(private.settings.ignoreCharacters or {}) do
+		if ignored then
+			tinsert(ignoredChars, player)
+		end
+	end
+	print(("ignoreCharacters=[%s] (own character here previously zeroed the restock calculation)"):format(table.concat(ignoredChars, ", ")))
+	TempTable.Release(ignoredChars)
 end

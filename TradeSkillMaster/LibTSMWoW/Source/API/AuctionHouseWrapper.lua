@@ -57,7 +57,12 @@ local OWNER_SORTS_TABLE = ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HO
 	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
 	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
 }
-local PRICE_BROWSE_SORTS_TABLE = { "unitprice" }
+-- 3.3.5: "buyout" is a valid classic sort column (verified via the client's
+-- AuctionSort lists); "unitprice" does NOT exist on 3.3.5 and may poison the
+-- whole sort stack, so it must not be requested. Note: some cores return the
+-- entire category in a single page, in which case the sort only matters for
+-- page-order verification, not pagination.
+local PRICE_BROWSE_SORTS_TABLE = { "buyout" }
 local BROWSE_SORTS_TABLE = ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) and {
 		{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
 		{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
@@ -92,26 +97,26 @@ local AUCTION_WON_PREFIX, AUCTION_WON_SUFFIX = nil, nil
 if ERR_AUCTION_WON_S then
 	AUCTION_WON_PREFIX, AUCTION_WON_SUFFIX = strmatch(ERR_AUCTION_WON_S, "^(.-)%%s(.-)$")
 end
--- Modern Enum.ItemClass.* -> 3.3.5 AH positional 1-based classIndex.
+-- Active provider Enum.ItemClass.* -> 3.3.5 AH positional 1-based classIndex.
 -- WotLK GetAuctionItemClasses() order is fixed (Glyph was inserted at position 5,
 -- right after Consumable, in 3.0; Quest Items is the last category):
 --   1=Weapon 2=Armor 3=Container 4=Consumable 5=Glyph 6=TradeGoods
 --   7=Projectile 8=Quiver 9=Recipe 10=Gem 11=Misc 12=Quest
--- ClassicAPI shims Enum.ItemClass to modern codes but doesn't translate at the
--- QueryAuctionItems call site, so we do it here.
-local MODERN_TO_AH_CLASSIC_INDEX = {
-	[2]  = 1,  -- Weapon
-	[4]  = 2,  -- Armor
-	[1]  = 3,  -- Container
-	[0]  = 4,  -- Consumable
-	[16] = 5,  -- Glyph
-	[7]  = 6,  -- Trade Goods
-	[6]  = 7,  -- Projectile
-	[11] = 8,  -- Quiver
-	[9]  = 9,  -- Recipe
-	[3]  = 10, -- Gem
-	[15] = 11, -- Miscellaneous
-	[12] = 12, -- Quest
+-- External ClassicAPI uses AH positions while the bundled fallback uses modern
+-- codes, so key the translation by the active Enum values rather than literals.
+local ITEM_CLASS_ID_TO_AH_INDEX = {
+	[Enum.ItemClass.Weapon] = 1,
+	[Enum.ItemClass.Armor] = 2,
+	[Enum.ItemClass.Container] = 3,
+	[Enum.ItemClass.Consumable] = 4,
+	[Enum.ItemClass.Glyph] = 5,
+	[Enum.ItemClass.Tradegoods] = 6,
+	[Enum.ItemClass.Projectile] = 7,
+	[Enum.ItemClass.Quiver] = 8,
+	[Enum.ItemClass.Recipe] = 9,
+	[Enum.ItemClass.Gem] = 10,
+	[Enum.ItemClass.Miscellaneous] = 11,
+	[Enum.ItemClass.Questitem] = 12,
 }
 local API_EVENT_INFO = not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) and
 	{ -- Classic
@@ -451,6 +456,7 @@ function AuctionHouseWrapper.SendQuery(str, class, subClass, invType, minLevel, 
 	else
 		-- QueryAuctionItems(name, minLevel, maxLevel, invTypeIndex, classIndex, subclassIndex, page, isUsable, qualityIndex, getAll)
 		local invTypeIndex = nil
+		local classId = nil
 		local classIndex = nil
 		local subclassIndex = nil
 		local getAllFlag = getAll and true or nil
@@ -465,8 +471,8 @@ function AuctionHouseWrapper.SendQuery(str, class, subClass, invType, minLevel, 
 			usableFlag = 1
 		end
 		if #classFiltersTemp > 0 then
-			local modernClassID = classFiltersTemp[1].classID
-			classIndex = MODERN_TO_AH_CLASSIC_INDEX[modernClassID]
+			classId = classFiltersTemp[1].classID
+			classIndex = ITEM_CLASS_ID_TO_AH_INDEX[classId]
 			-- subClassID on 3.3.5 is also 1-based positional into
 			-- GetAuctionItemSubClasses(classIndex); we don't have a generic
 			-- translation table for it, so drop it. Items get post-filtered
@@ -476,7 +482,10 @@ function AuctionHouseWrapper.SendQuery(str, class, subClass, invType, minLevel, 
 		end
 		-- Debug output disabled for classic SendQuery to reduce chat spam
 		-- print(string.format("TSM:classic SendQuery str=%s page=%s class=%s subClass=%s invType=%s minLevel=%s maxLevel=%s qualityIndex=%s usable=%s getAll=%s", tostring(str), tostring(page), tostring(classIndex), tostring(subclassIndex), tostring(invTypeIndex), tostring(minLevel), tostring(maxLevel), tostring(qualityIndex), tostring(usableFlag), tostring(getAllFlag)))
-		local future = private.wrappers.QueryAuctionItems:Start(str, minLevel, maxLevel, invTypeIndex, classIndex, subclassIndex, page, usableFlag, qualityIndex, getAllFlag)
+		local queryWrapper = private.wrappers.QueryAuctionItems
+		queryWrapper._scanTraceClassId = classId
+		local future = queryWrapper:Start(str, minLevel, maxLevel, invTypeIndex, classIndex, subclassIndex, page, usableFlag, qualityIndex, getAllFlag)
+		queryWrapper._scanTraceClassId = nil
 		-- print(string.format("TSM:classic SendQuery future=%s", tostring(future ~= nil)))
 		if TSMDBG then
 			TSMDBG.Log("AuctionHouseWrapper", "classic SendQuery str=%s page=%s class=%s subClass=%s invType=%s minLevel=%s maxLevel=%s minQuality=%s usable=%s getAll=%s", tostring(str), tostring(page), tostring(classIndex), tostring(subclassIndex), tostring(invTypeIndex), tostring(minLevel), tostring(maxLevel), tostring(minQuality), tostring(usable), tostring(getAllFlag))
@@ -886,6 +895,13 @@ function APIWrapper:_CallAPI(...)
 	if apiName == "PostAuction" and not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
 		apiName = "StartAuction"
 	end
+	if apiName == "QueryAuctionItems" and _G.TSM_SCAN_TRACE and TSMDBG and TSMDBG.PriceLogTrace then
+		local queryText, _, _, _, classIndex, _, page = ...
+		TSMDBG.PriceLogTrace(string.format(
+			"[TSM ScanTrace] SEND q=%q page=%s classId=%s classIndex=%s",
+			tostring(queryText), tostring(page), tostring(self._scanTraceClassId), tostring(classIndex)
+		))
+	end
 	return (ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) and C_AuctionHouse or _G)[apiName](...)
 end
 
@@ -1190,16 +1206,6 @@ function private.EventHandlerHelper(wrappers, eventName, ...)
 	end
 end
 
-function private.CheckAllIdle()
-	for apiName, wrapper in pairs(private.wrappers) do
-		if not wrapper:IsIdle() then
-			Log.Err("Another wrapper is pending (%s)", apiName)
-			return false
-		end
-	end
-	return true
-end
-
 ---3.3.5: matches the formatted ERR_AUCTION_WON_S buyout-won system message by prefix/suffix
 ---(the middle is the item name), used to resolve the PlaceAuctionBid future on a buyout.
 ---@param msg string
@@ -1269,4 +1275,3 @@ function private.PendingAutoOwnedFutureOnDone()
 	private.pendingAutoOwnedAuctionsFuture:GetValue()
 	private.pendingAutoOwnedAuctionsFuture = nil
 end
-

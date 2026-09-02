@@ -47,11 +47,11 @@ function Merchant.GetItemInfo(index)
 	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_MERCHANTFRAME) then
 		local info = C_MerchantFrame.GetItemInfo(index)
 		if info then
-			return info.price, info.stackCount, info.numAvailable
+			return info.price, info.stackCount, info.numAvailable, info.name, info.texture
 		end
 	else
-		local _, _, price, stackSize, numAvailable = GetMerchantItemInfo(index)
-		return price, stackSize, numAvailable
+		local name, texture, price, stackSize, numAvailable = GetMerchantItemInfo(index)
+		return price, stackSize, numAvailable, name, texture
 	end
 end
 

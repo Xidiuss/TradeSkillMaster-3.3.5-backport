@@ -218,15 +218,51 @@ function private.ScanThread(auctionScan, groupList)
 		return
 	end
 	TSM.Auctioning.SavedSearches.RecordSearch(groupList, "cancelGroups")
+	if TSMDBG and TSMDBG.PriceLogBegin then
+		TSMDBG.PriceLogBegin("CANCEL", #private.itemList)
+	end
 
 	-- run the scan
 	auctionScan:AddItemListQueriesThreaded(private.itemList)
 	for _, query2 in auctionScan:QueryIterator() do
 		query2:AddCustomFilter(private.QueryBuyoutFilter)
+		local scanPlanKind = query2:GetScanPlanKind()
+		if (ClientInfo.IsVanillaClassic() or ClientInfo.IsBCClassic() or ClientInfo.IsWrathClassic())
+			and not scanPlanKind then
+			query2:SetIsBrowseDoneFunction(private.QueryIsBrowseDoneFunction)
+		end
 	end
-	if not auctionScan:ScanQueriesThreaded() then
+	local scanSuccess = auctionScan:ScanQueriesThreaded()
+	if TSMDBG and TSMDBG.PriceLogEnd then
+		TSMDBG.PriceLogEnd("CANCEL", scanSuccess)
+	end
+	if not scanSuccess then
 		ChatMessage.PrintUser(L["TSM failed to scan some auctions. Please rerun the scan."])
 	end
+end
+
+---Classic-only browse-done check: with price-ascending pages (class-batch
+---queries) the first subrow seen for an item is its cheapest auction, so the
+---item's undercut decision is final once it has been seen once. Items not seen
+---yet keep the scan paging (they may have no auctions at all, which is only
+---provable by reaching the last page).
+---@param query any
+---@return boolean
+function private.QueryIsBrowseDoneFunction(query)
+	if not query:IsPriceSorted() then
+		return false
+	end
+	local isDone = true
+	for itemString in query:ItemIterator() do
+		local numSubRows = 0
+		for _ in query:ItemSubRowIterator(itemString) do
+			numSubRows = numSubRows + 1
+		end
+		if numSubRows == 0 then
+			isDone = false
+		end
+	end
+	return isDone
 end
 
 
@@ -345,7 +381,7 @@ function private.GenerateCancels(auctionsDBRow, itemString, groupPath, query)
 			TSM.Auctioning.Util.GetFilteredSubRows(query, itemString, operationSettings, private.subRowsTemp)
 			assert(not next(private.listedAuctionTemp))
 			private.GetListedAuction(auctionsDBRow, private.listedAuctionTemp)
-			local handled, result, seller = private.GenerateCancel(private.listedAuctionTemp, itemString, operationName, operationSettings, private.subRowsTemp)
+			local handled, result, seller = private.GenerateCancel(private.listedAuctionTemp, itemString, operationName, operationSettings, private.subRowsTemp, query)
 			local itemBuyout = private.listedAuctionTemp.itemBuyout
 			local auctionId = private.listedAuctionTemp.auctionId or 0
 			wipe(private.listedAuctionTemp)
@@ -375,7 +411,7 @@ function private.GetListedAuction(auctionsDBRow, resultTbl)
 	resultTbl.canAffordCancel = not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) or C_AuctionHouse.GetCancelCost(auctionId) <= GetMoney()
 end
 
-function private.GenerateCancel(listedAuction, itemString, operationName, operationSettings, subRows)
+function private.GenerateCancel(listedAuction, itemString, operationName, operationSettings, subRows, query)
 	local lowestAuction = TempTable.Acquire()
 	if not TSM.Auctioning.Util.GetLowestAuction(subRows, itemString, operationSettings, lowestAuction) then
 		TempTable.Release(lowestAuction)
@@ -384,6 +420,7 @@ function private.GenerateCancel(listedAuction, itemString, operationName, operat
 	assert(not next(private.scanResultTemp))
 	TSM.Auctioning.Util.GetCancelScanResult(subRows, itemString, operationSettings, lowestAuction, private.scanResultTemp)
 	local handled, result = AuctioningOperation.MakeCancelDecision(itemString, operationSettings, lowestAuction, listedAuction, private.scanResultTemp)
+	private.PriceLogCancelDecision(query, itemString, operationName, operationSettings, lowestAuction, listedAuction, private.scanResultTemp, handled, result)
 	wipe(private.scanResultTemp)
 	local seller = lowestAuction and lowestAuction.seller or nil
 	if lowestAuction then
@@ -395,6 +432,36 @@ function private.GenerateCancel(listedAuction, itemString, operationName, operat
 		private.AddToQueue(itemString, operationName, listedAuction)
 	end
 	return handled, result, seller
+end
+
+function private.PriceLogCancelDecision(query, itemString, operationName, operationSettings, lowestAuction, listedAuction, scanResult, handled, decision)
+	if not _G.TSM_SCAN_TRACE or not TSMDBG or not TSMDBG.PriceLogDecision then
+		return
+	end
+	TSMDBG.PriceLogDecision("CANCEL", {
+		itemString = itemString,
+		itemId = ItemString.ToId(itemString),
+		itemName = ItemInfo.GetName(itemString) or "",
+		operation = operationName,
+		marketBid = lowestAuction and lowestAuction.bid or nil,
+		marketBuyout = lowestAuction and lowestAuction.buyout or nil,
+		marketSeller = lowestAuction and lowestAuction.seller or nil,
+		listedBid = listedAuction.itemBid,
+		listedBuyout = listedAuction.itemBuyout,
+		auctionId = listedAuction.auctionId,
+		hasBid = listedAuction.hasBid and true or false,
+		minPrice = AuctioningOperation.GetItemPrice(itemString, "minPrice", operationSettings),
+		normalPrice = AuctioningOperation.GetItemPrice(itemString, "normalPrice", operationSettings),
+		maxPrice = AuctioningOperation.GetItemPrice(itemString, "maxPrice", operationSettings),
+		undercut = AuctioningOperation.GetItemPrice(itemString, "undercut", operationSettings),
+		cancelRepostThreshold = AuctioningOperation.GetItemPrice(itemString, "cancelRepostThreshold", operationSettings),
+		playerLowestBuyout = scanResult.playerLowestItemBuyout,
+		secondLowestBuyout = scanResult.secondLowestBuyout,
+		handled = handled and true or false,
+		decision = decision and tostring(decision) or "NONE",
+		queryKind = query and (query:GetScanPlanKind() or "LEGACY") or "UNKNOWN",
+		queryEndReason = query and (query:GetEndReason() or "UNKNOWN") or "UNKNOWN",
+	})
 end
 
 function private.AddToQueue(itemString, operationName, listedAuction)

@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: |cff00fe00TSM Cancel Scan Log|r
+## Notes: Separate CANCEL scan diagnostics for TradeSkillMaster.
+## Author: Keoo
+## Version: 1.0.0
+## Dependencies: TradeSkillMaster
+## SavedVariables: TSMCancelScanLogDB
+
+Core.lua

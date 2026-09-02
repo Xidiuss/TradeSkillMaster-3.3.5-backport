@@ -275,6 +275,16 @@ function TSM.OnInitialize(settingsDB)
 			if not value and key == "regionMarketValue" then
 				value = TSM.AuctionDB.GetRealmItemData(itemString, "marketValue")
 			end
+			-- Do not fall back to minBuyout for market sources: it is the easiest
+			-- value to manipulate and can drive pricing operations into a race to
+			-- the bottom. If no auction data exists at all, use a conservative
+			-- vendor-based floor so the default operations still produce a price.
+			if not value and (key == "marketValue" or key == "regionMarketValue") then
+				local vendorSell = ItemInfo.GetVendorSell(itemString)
+				if vendorSell and vendorSell > 0 then
+					value = vendorSell * 2
+				end
+			end
 			return value
 		end
 	end

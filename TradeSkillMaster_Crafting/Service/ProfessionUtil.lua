@@ -386,7 +386,11 @@ function private.GetPlayerCastingInfo()
 			return nil
 		end
 		local spellId = nil
-		if private.craftSpellId and GetSpellInfo(private.craftSpellId) == name then
+		-- 3.3.5: craftSpellId in craftStrings is a synthetic hash from the classic
+		-- profession scanner, so GetSpellInfo() can never resolve it. Match the
+		-- cast by name against craftName (the same value SpellMatchesCraft
+		-- compares), keeping the spellId lookup as a fallback.
+		if private.craftSpellId and (private.craftName == name or GetSpellInfo(private.craftSpellId) == name) then
 			spellId = private.craftSpellId
 		else
 			-- some other spell is being cast; return a sentinel so the caller

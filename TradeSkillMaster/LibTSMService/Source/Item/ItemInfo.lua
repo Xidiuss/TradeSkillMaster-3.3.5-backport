@@ -58,7 +58,7 @@ local UNKNOWN_ITEM_TEXTURE = "Interface\\Icons\\INV_Misc_QuestionMark"
 -- 21: сброс кэша после добавления tooltip-скана bindType (API/Item.lua): версия 20
 -- кэшировала isBOP=0 для ВСЕХ предметов (GetItemInfo на 3.3.5 не отдаёт bindType),
 -- теперь реальный bind type восстанавливается из тултипа.
-local DB_VERSION = 21
+local DB_VERSION = 22
 local PENDING_STATE = EnumType.New("ITEM_INFO_PENDING_STATE", {
 	NEW = EnumType.NewValue(),
 	CREATED = EnumType.NewValue(),

@@ -664,6 +664,10 @@ function AuctioningOperation.MakeCancelDecision(itemString, operationSettings, l
 	elseif not operationSettings.cancelUndercut then
 		-- We're undercut but not canceling undercut auctions
 		return false, nil
+	elseif listedAuction.itemBuyout < lowestAuction.buyout then
+		-- Category scans may omit our own auction. A visible higher-priced auction
+		-- does not undercut our listing, so keep the cheaper listing posted.
+		return false, RESULT.NOT_CANCELING.NOT_UNDERCUT
 	elseif lowestAuction.isWhitelist and listedAuction.itemBuyout == lowestAuction.buyout then
 		-- At whitelisted player price
 		return true, RESULT.NOT_CANCELING.AT_WHITELIST

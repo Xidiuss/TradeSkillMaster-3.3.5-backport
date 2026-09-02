@@ -8,6 +8,7 @@ local TSM = _G.TSMAddon ---@type TSM
 local Crafting = TSM.MainUI.Settings:NewPackage("Crafting") ---@type AddonPackage
 local L = TSM.Locale.GetTable()
 local PlayerInfo = TSM.LibTSMApp:Include("Service.PlayerInfo")
+local SessionInfo = TSM.LibTSMWoW:Include("Util.SessionInfo")
 local UIElements = TSM.LibTSMUI:Include("Util.UIElements")
 local UIUtils = TSM.LibTSMUI:Include("Util.UIUtils")
 local private = {
@@ -54,7 +55,12 @@ function private.GetCraftingSettingsFrame()
 	wipe(private.altCharacters)
 	wipe(private.altGuilds)
 	for _, character in PlayerInfo.CharacterIterator(true) do
-		tinsert(private.altCharacters, character)
+		-- The current player's own inventory is always part of NumInventory and can
+		-- never be "ignored" by the restock math, so don't offer it for selection
+		-- (selecting it previously zeroed out the restock have-quantity).
+		if not SessionInfo.IsPlayer(character) then
+			tinsert(private.altCharacters, character)
+		end
 	end
 	for _, name in PlayerInfo.GuildIterator() do
 		tinsert(private.altGuilds, name)

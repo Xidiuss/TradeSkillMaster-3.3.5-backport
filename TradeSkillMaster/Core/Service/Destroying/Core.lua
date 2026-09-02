@@ -55,8 +55,6 @@ local SPELL_IDS = {
 	prospect = 31252,
 	disenchant = 13262,
 }
-local ITEM_SUB_CLASS_METAL_AND_STONE = 7
-local ITEM_SUB_CLASS_HERB = 9
 local TARGET_SLOT_ID_MULTIPLIER = 1000000
 local CLEANUP_TIME_THRESHOLD = 60 * 24 * 60 * 60
 local CLEANUP_MAX_ENTRIES = 100
@@ -633,6 +631,16 @@ function private.ProcessBagItem(itemString)
 	return minQuantity, spellId
 end
 
+function private.HasDestroyConversion(itemString, method, skillLevel)
+	local hasConversion = false
+	for _, _, _, _, _, _, _, skillRequired in Conversion.TargetItemsByMethodIterator(itemString, method) do
+		if not skillRequired or (skillLevel and skillLevel >= skillRequired) then
+			hasConversion = true
+		end
+	end
+	return hasConversion
+end
+
 function private.IsDestroyable(itemString)
 	-- 3.3.5 perf: кэшируются и негативные результаты (canDestroyCache == false
 	-- при destroyQuantityCache == nil) — раньше каждый BAG_UPDATE прогонял все
@@ -675,29 +683,13 @@ function private.IsDestroyable(itemString)
 		return private.canDestroyCache[itemString], private.destroyQuantityCache[itemString]
 	end
 
-	local conversionMethod, destroySpellId = nil, nil
-	local classId = ItemInfo.GetClassId(itemString)
-	local subClassId = ItemInfo.GetSubClassId(itemString)
-	-- Workaround for Fire Leaf (i:39970) not being treated as an herb (at least in classsic)
-	if (classId == Enum.ItemClass.Tradegoods and subClassId == ITEM_SUB_CLASS_HERB) or itemString == "i:39970" then
-		conversionMethod = Conversion.METHOD.MILL
+	local destroySpellId = nil
+	if private.HasDestroyConversion(itemString, Conversion.METHOD.MILL, private.inscriptionSkillLevel) then
 		destroySpellId = SPELL_IDS.milling
-	elseif classId == Enum.ItemClass.Tradegoods and subClassId == ITEM_SUB_CLASS_METAL_AND_STONE then
-		conversionMethod = Conversion.METHOD.PROSPECT
+	elseif private.HasDestroyConversion(itemString, Conversion.METHOD.PROSPECT, private.jewelcraftSkillLevel) then
 		destroySpellId = SPELL_IDS.prospect
-	else
-		private.canDestroyCache[itemString] = false
-		private.destroyQuantityCache[itemString] = nil
-		return private.canDestroyCache[itemString], private.destroyQuantityCache[itemString]
 	end
-
-	local hasSourceItem = false
-	for _, _, _, _, _, _, _, skillRequired in Conversion.TargetItemsByMethodIterator(itemString, conversionMethod) do
-		if not skillRequired or (conversionMethod == Conversion.METHOD.PROSPECT and private.jewelcraftSkillLevel and skillRequired and private.jewelcraftSkillLevel >= skillRequired) or (conversionMethod == Conversion.METHOD.MILL and private.inscriptionSkillLevel and skillRequired and private.inscriptionSkillLevel >= skillRequired) then
-			hasSourceItem = true
-		end
-	end
-	if hasSourceItem then
+	if destroySpellId then
 		private.canDestroyCache[itemString] = IsSpellKnown(destroySpellId) and destroySpellId
 		private.destroyQuantityCache[itemString] = 5
 		return private.canDestroyCache[itemString], private.destroyQuantityCache[itemString]

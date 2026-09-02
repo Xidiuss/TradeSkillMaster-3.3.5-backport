@@ -41,13 +41,52 @@ local private = {
 	updateTimer = nil,
 	missingItemIds = {},
 	sellerWaitCounts = {},
+	sellerWaitStart = nil,
+	-- Timing instrumentation toggled by "/tsmcraftdebug scantrace": one line per
+	-- completed browse query showing where its time went, plus per-page price and
+	-- stack statistics to diagnose whether the server actually returns
+	-- price-sorted pages and single-stack auctions.
+	scanTrace = {
+		t0 = nil, tSend = nil, tResp = nil,
+		str = nil, sellerRows = 0,
+		pageStats = nil,
+		pageReqStart = nil, pendingReqDur = nil,
+		targetsSeen = 0, targetsTotal = 0, pagesCount = 0,
+		finalBuyoutOrder = nil, finalUnitOrder = nil, finalEndedEarly = nil, finalEndReason = nil,
+	},
+	-- 3.3.5 diagnostics: row indexes already counted for the current page. Pending
+	-- rows are re-processed by retry passes; without this guard each pass would
+	-- re-count the row in pageStats AND re-record its price in the monotonicity
+	-- check, producing inflated row counts (rows>50) and FALSE order violations.
+	-- The guard lives AFTER the noInfo early-return, so a row whose price isn't
+	-- valid yet never marks its index and will be recorded once it becomes valid.
+	tracedRowIndexes = {},
 	-- 3.3.5 diagnostics: per-scan counters for the classic browse processing
 	-- pipeline (printed for traced queries, e.g. DE scan)
-	classicStats = { seen = 0, noInfo = 0, noLink = 0, badLink = 0, nameSkip = 0, earlyReject = 0, added = 0 },
+	classicStats = { seen = 0, noInfo = 0, noLink = 0, badLink = 0, nameSkip = 0, earlyReject = 0, added = 0, nameReject = 0, pendingPasses = 0, tBrowse = 0, tParse = 0, tPopulate = 0 },
+	-- 3.3.5 perf: for class-batch queries (empty str with an item set) a name set
+	-- built from the target items lets rows be rejected right after the cheap
+	-- GetAuctionItemInfo call, before the expensive link fetch/parsing - the
+	-- whole category comes back in one page on some cores (1200+ rows) while
+	-- only a few dozen items are actually wanted.
+	classicNameFilter = nil,
+	-- Diagnostics-only target-name set. Unlike classicNameFilter this is built
+	-- for CATEGORY, NARROW, and EXACT queries and never changes scan filtering;
+	-- it only prevents unrelated category rows from bloating the raw log.
+	classicTraceNameFilter = nil,
 }
-local BROWSE_MISSING_INFO_RETRY_DELAY = 0.5
-local BROWSE_EMPTY_RETRY_DELAY = 0.25
+-- 3.3.5 scan pacing: per-query retry cadences. These directly set the per-item
+-- cost of post/cancel scans (45-70 items): every pending recheck rounds the wait
+-- up to a multiple of these delays, so they are kept low. The client-side
+-- CanSendAuctionQuery() gate (not tunable from Lua) is the remaining floor.
+local BROWSE_MISSING_INFO_RETRY_DELAY = 0.15
+local BROWSE_EMPTY_RETRY_DELAY = 0.1
 local BROWSE_EMPTY_RETRY_MAX = 12
+-- 3.3.5: how long to wait for owner ("seller") names to arrive after a browse
+-- page before substituting "?". Owner data lands on the client a moment after
+-- the page itself; time-based (instead of 2 fixed 0.5s passes) resolves at the
+-- actual arrival time.
+local SELLER_WAIT_MAX_TIME = 0.75
 local SEARCH_NOT_READY_RETRY_DELAY = 0.1
 local SEARCH_MISSING_ITEM_INFO_RETRY_DELAY = 0.1
 local SEARCH_AH_NOT_READY_RETRY_DELAY = 0.5
@@ -115,6 +154,9 @@ Scanner:OnModuleLoad(function()
 				private.browseEmptyRetryCount = 0
 				private.browseSendThrottleWaitCount = 0
 				private.browseSendIsThrottleWait = false
+				private.sellerWaitStart = nil
+				private.classicNameFilter = nil
+				private.classicTraceNameFilter = nil
 				private.retryTimer:Cancel()
 				if private.pendingFuture then
 					private.pendingFuture:Cancel()
@@ -133,6 +175,29 @@ Scanner:OnModuleLoad(function()
 				private.browseId = private.browseId + 1
 				private.browseIsNoScan = false
 				private.callback = callback
+				if _G.TSM_SCAN_TRACE then
+					private.scanTrace.t0 = GetTime()
+					private.scanTrace.tSend = nil
+					private.scanTrace.tResp = nil
+					private.scanTrace.str = query._str
+					private.scanTrace.pageStats = nil
+					private.scanTrace.pageReqStart = nil
+					private.scanTrace.pendingReqDur = nil
+					private.scanTrace.pagesCount = 0
+					private.scanTrace.targetsSeen = 0
+					private.scanTrace.finalBuyoutOrder = nil
+					private.scanTrace.finalUnitOrder = nil
+					private.scanTrace.finalEndedEarly = nil
+					private.scanTrace.finalEndReason = nil
+					wipe(private.tracedRowIndexes)
+					local targetsTotal = 0
+					for _ in query:ItemIterator() do
+						targetsTotal = targetsTotal + 1
+					end
+					private.scanTrace.targetsTotal = targetsTotal
+				end
+				private.classicNameFilter = private.BuildClassicNameFilter(query)
+				private.classicTraceNameFilter = private.BuildClassicTraceNameFilter(query)
 				return "ST_BROWSE_SORT"
 			end)
 			:AddEvent("EV_START_BROWSE_NO_SCAN", function(_, query, itemKeys, callback)
@@ -179,21 +244,35 @@ Scanner:OnModuleLoad(function()
 				if private.MaybeWaitForBrowseSendThrottle() then
 					return
 				end
+				private.scanTrace.pageReqStart = GetTime()
+				if _G.TSM_SCAN_TRACE and private.scanTrace.t0 and not private.scanTrace.tSend then
+					-- first actual send of this query (after the CanSendQuery gate)
+					private.scanTrace.tSend = GetTime()
+				end
 				private.browseSendIsThrottleWait = false
 				private.HandleAuctionHouseWrapperResult(private.query:_SendWowQuery())
 			end)
-			:AddTransition("ST_BROWSE_SEND")
-			:AddTransition("ST_BROWSE_CHECKING")
-			:AddTransition("ST_CANCELING")
-			:AddEvent("EV_FUTURE_SUCCESS", function()
-				if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
-					for _, result in ipairs(AuctionHouse.GetBrowseResults()) do
-						local baseItemString = ItemString.GetBaseFromItemKey(result.itemKey)
-						private.query:_ProcessBrowseResult(baseItemString, result.itemKey, result.minPrice, result.totalQuantity)
-					end
+				:AddTransition("ST_BROWSE_SEND")
+				:AddTransition("ST_BROWSE_CHECKING")
+				:AddTransition("ST_CANCELING")
+				:AddEvent("EV_FUTURE_SUCCESS", function()
+					if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
+						for _, result in ipairs(AuctionHouse.GetBrowseResults()) do
+							local baseItemString = ItemString.GetBaseFromItemKey(result.itemKey)
+							private.query:_ProcessBrowseResult(baseItemString, result.itemKey, result.minPrice, result.totalQuantity)
+						end
 				else
+					if private.scanTrace.pageReqStart then
+						private.scanTrace.pendingReqDur = GetTime() - private.scanTrace.pageReqStart
+					end
+					wipe(private.tracedRowIndexes)
 					private.browseIndex = 1
+					private.sellerWaitStart = nil
 					wipe(private.browsePendingIndexes)
+					if _G.TSM_SCAN_TRACE and private.scanTrace.t0 then
+						private.scanTrace.tResp = GetTime()
+					end
+					private.ScanTraceFinishPage()
 				end
 				return "ST_BROWSE_CHECKING"
 			end)
@@ -254,6 +333,7 @@ Scanner:OnModuleLoad(function()
 					isRetry = false
 					private.browseSendIsThrottleWait = false
 				end
+				private.scanTrace.pageReqStart = GetTime()
 				private.HandleAuctionHouseWrapperResult(private.query:_BrowseRequestMore(isRetry))
 			end)
 			:AddTransition("ST_BROWSE_REQUEST_MORE")
@@ -267,7 +347,13 @@ Scanner:OnModuleLoad(function()
 						private.query:_ProcessBrowseResult(baseItemString, result.itemKey, result.minPrice, result.totalQuantity)
 					end
 				else
+					if private.scanTrace.pageReqStart then
+						private.scanTrace.pendingReqDur = GetTime() - private.scanTrace.pageReqStart
+					end
+					wipe(private.tracedRowIndexes)
+					private.ScanTraceFinishPage()
 					private.browseIndex = 1
+					private.sellerWaitStart = nil
 					wipe(private.browsePendingIndexes)
 				end
 				return "ST_BROWSE_CHECKING"
@@ -282,6 +368,14 @@ Scanner:OnModuleLoad(function()
 		)
 		:AddState(FSM.NewState("ST_BROWSE_DONE")
 			:SetOnEnter(function()
+				-- Stash the query's final state BEFORE ST_INIT clears it - the done
+				-- timer fires on the next frame, after private.query is already nil.
+				if private.query then
+					private.scanTrace.finalBuyoutOrder = private.query:IsBuyoutOrdered() and true or false
+					private.scanTrace.finalUnitOrder = private.query:IsPriceSorted() and true or false
+					private.scanTrace.finalEndedEarly = private.query:HasEndedEarly() and true or false
+					private.scanTrace.finalEndReason = private.query:GetEndReason()
+				end
 				private.HandleRequestDone(true)
 				return "ST_INIT"
 			end)
@@ -556,10 +650,106 @@ function private.PendingFutureDoneHandler()
 	end
 end
 
+---Builds a lowercase name set from the query's items for cheap row rejection on
+---class-batch queries (empty str with an item set). Returns nil when not
+---applicable (name queries already filter by str; queries without items or with
+---unresolvable item names fall back to the full pipeline).
+---@param query AuctionQuery
+---@return table<string,true>? nameSet
+function private.BuildClassicNameFilter(query)
+	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
+		return nil
+	end
+	if query._str ~= "" or not query._items or not next(query._items) then
+		return nil
+	end
+	local nameSet = nil
+	for itemString in query:ItemIterator() do
+		local name = ItemInfo.GetName(itemString)
+		if name then
+			if not nameSet then
+				nameSet = {}
+			end
+			nameSet[strlower(name)] = true
+		end
+	end
+	return nameSet
+end
+
+---Builds a target-name set used exclusively by raw scan diagnostics. Every
+---classic planned query carries its target item set, including name-based
+---NARROW and EXACT queries, so this filter stays small without affecting which
+---rows enter the actual scanner pipeline.
+---@param query AuctionQuery
+---@return table<string,true>? nameSet
+function private.BuildClassicTraceNameFilter(query)
+	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) or not _G.TSM_SCAN_TRACE then
+		return nil
+	end
+	local nameSet = nil
+	for itemString in query:ItemIterator() do
+		local name = ItemInfo.GetName(itemString)
+		if name then
+			if not nameSet then
+				nameSet = {}
+			end
+			nameSet[strlower(name)] = true
+		end
+	end
+	return nameSet
+end
+
 function private.RetryHandler()
 	private.fsm:SetLoggingEnabled(false)
 	private.fsm:ProcessEvent("EV_RETRY")
 	private.fsm:SetLoggingEnabled(true)
+end
+
+---Prints the completed page's statistics (scantrace) and resets them for the
+---next page. buyout and unit orderings are reported independently: buyout order
+---is what a bounded early-stop needs (future rows can't be cheaper than
+--- maxBuyout / maxStack); unit order is what first-seen conclusions need.
+function private.ScanTraceFinishPage()
+	if not _G.TSM_SCAN_TRACE then
+		return
+	end
+	local ps = private.scanTrace.pageStats
+	private.scanTrace.pageStats = nil
+	if ps then
+		private.scanTrace.pagesCount = (private.scanTrace.pagesCount or 0) + 1
+		local query = private.query
+		local targetsTotal = private.scanTrace.targetsTotal or 0
+		local targetsSeen = 0
+		if query then
+			for itemString in query:ItemIterator() do
+				local row = query:_GetBrowseResults(itemString)
+				if row and row:GetNumSubRows() > 0 then
+					targetsSeen = targetsSeen + 1
+				end
+			end
+		else
+			targetsSeen = private.scanTrace.targetsSeen or 0
+		end
+		local newTargets = targetsSeen - (private.scanTrace.targetsSeen or 0)
+		private.scanTrace.targetsSeen = targetsSeen
+		local message = ("[TSM ScanTrace] page=%d rows=%d req=%s | buyout[%s..%s] %s | unit[%s..%s] %s | qtyMax=%d stacksGt1=%d | targets %d/%d (+%d)"):format(
+			ps.page,
+			ps.rows,
+			ps.req and string.format("%.2fs", ps.req) or "-",
+			ps.minBuyout and string.format("%.4g", ps.minBuyout) or "-",
+			ps.maxBuyout and string.format("%.4g", ps.maxBuyout) or "-",
+			query and (query:IsBuyoutOrdered() and "OK" or "VIOLATED") or (private.scanTrace.finalBuyoutOrder == nil and "?" or (private.scanTrace.finalBuyoutOrder and "OK" or "VIOLATED")),
+			ps.minUnit and string.format("%.4g", ps.minUnit) or "-",
+			ps.maxUnit and string.format("%.4g", ps.maxUnit) or "-",
+			query and (query:IsPriceSorted() and "OK" or "VIOLATED") or (private.scanTrace.finalUnitOrder == nil and "?" or (private.scanTrace.finalUnitOrder and "OK" or "VIOLATED")),
+			ps.qtyMax or 0,
+			ps.stacksGt1 or 0,
+			targetsSeen,
+			targetsTotal,
+			newTargets
+		)
+		TSMDBG.PriceLogTrace(message)
+	end
 end
 
 ---Returns true when a classic browse send must wait for CanSendAuctionQuery().
@@ -581,6 +771,36 @@ end
 function private.RequestDoneHandler()
 	local result = private.requestResult
 	private.requestResult = nil
+	if _G.TSM_SCAN_TRACE and private.scanTrace.t0 then
+		private.ScanTraceFinishPage()
+		local tr = private.scanTrace
+		local tDone = GetTime()
+		local sellerRows = 0
+		for _ in pairs(private.sellerWaitCounts) do
+			sellerRows = sellerRows + 1
+		end
+		local message = ("[TSM ScanTrace] q=\"%s\" total=%.2fs gate+send=%.2fs send->resp=%.2fs resp->done=%.2fs emptyRetry=%d/%d sellerWaitRows=%d pages=%d endedEarly=%s reason=%s unresolved=%d buyoutOrder=%s unitOrder=%s targets=%d/%d result=%s"):format(
+			tostring(tr.str),
+			tDone - tr.t0,
+			(tr.tSend or tDone) - tr.t0,
+			tr.tResp and tr.tSend and (tr.tResp - tr.tSend) or 0,
+			tr.tResp and (tDone - tr.tResp) or 0,
+			private.browseEmptyRetryCount or 0,
+			BROWSE_EMPTY_RETRY_MAX,
+			sellerRows,
+			tr.pagesCount or 0,
+			tostring(tr.finalEndedEarly == true),
+			tr.finalEndReason or "-",
+			max((tr.targetsTotal or 0) - (tr.targetsSeen or 0), 0),
+			tr.finalBuyoutOrder == nil and "?" or (tr.finalBuyoutOrder and "OK" or "VIOLATED"),
+			tr.finalUnitOrder == nil and "?" or (tr.finalUnitOrder and "OK" or "VIOLATED"),
+			tr.targetsSeen or 0,
+			tr.targetsTotal or 0,
+			tostring(result)
+		)
+		TSMDBG.PriceLogTrace(message)
+		tr.t0 = nil
+	end
 	-- 3.3.5 fix: the done timer fires on the NEXT frame, and the future can be
 	-- resolved in between (e.g. the AH closes mid-scan -> Scanner.Cancel() calls
 	-- Done(false) directly, or a preempt resolves it first). Calling Done() on a
@@ -704,17 +924,24 @@ function private.CheckBrowseResults()
 			-- new scan starting: reset the diagnostics counters
 			local cs = private.classicStats
 			cs.seen, cs.noInfo, cs.noLink, cs.badLink, cs.nameSkip, cs.earlyReject, cs.added = 0, 0, 0, 0, 0, 0, 0
+			cs.pendingPasses, cs.tBrowse, cs.tParse, cs.tPopulate, cs.nameReject = 0, 0, 0, 0, 0
 			wipe(private.sellerWaitCounts)
 		end
 		-- Some 3.3.5a cores briefly return an empty page right after a browse query.
 		-- Retry a few times instead of immediately showing an empty result set.
 		if numAuctions > 0 then
 			private.browseEmptyRetryCount = 0
-		elseif private.query and private.query._str and private.query._str ~= "" and private.browseEmptyRetryCount < BROWSE_EMPTY_RETRY_MAX then
+		elseif private.query and private.browseEmptyRetryCount < BROWSE_EMPTY_RETRY_MAX then
 			private.browseEmptyRetryCount = private.browseEmptyRetryCount + 1
 			private.retryTimer:RunForTime(BROWSE_EMPTY_RETRY_DELAY)
 			TSMDBG.Log("Scanner", "Classic browse returned empty page; retrying (%d/%d)", private.browseEmptyRetryCount, BROWSE_EMPTY_RETRY_MAX)
 			return false
+		elseif numAuctions == 0 and private.query and private.query:GetScanPlanKind() == "CATEGORY" and private.query:GetPage() == 0 then
+			-- An empty first CATEGORY response cannot be distinguished from a
+			-- delayed 3.3.5 browse payload. Never let it suppress the narrower
+			-- fallback plan as a false FULL result.
+			private.query:_SetBrowseEndReason("INCOMPLETE")
+			TSMDBG.Log("Scanner", "Classic CATEGORY stayed empty after retries; falling back")
 		end
 		for i = #private.browsePendingIndexes, 1, -1 do
 			local index = private.browsePendingIndexes[i]
@@ -747,6 +974,7 @@ function private.CheckBrowseResults()
 			return false
 		end
 		if private.browseIndex <= numAuctions or #private.browsePendingIndexes > 0 then
+			private.classicStats.pendingPasses = private.classicStats.pendingPasses + 1
 			return false
 		end
 	end
@@ -792,11 +1020,77 @@ end
 function private.ProcessBrowseResultClassic(index)
 	local cs = private.classicStats
 	cs.seen = cs.seen + 1
+	local tPhase = debugprofilestop()
 	local rawName, itemLink, stackSize, timeLeft, buyout, seller = AuctionHouse.GetBrowseResult(index)
-	
+	cs.tBrowse = cs.tBrowse + (debugprofilestop() - tPhase)
+
 	if not rawName or rawName == "" or not buyout or not stackSize or not timeLeft then
 		cs.noInfo = cs.noInfo + 1
 		return false
+	end
+
+	-- Record every row's unit price and stack buyout (before any name/item
+	-- filtering, since the page ordering is global) so the query can verify both
+	-- orderings independently while pages arrive. Counted/recorded ONCE per row
+	-- index per page (retries of pending rows are skipped) - but only rows whose
+	-- price is already valid mark their index, so noInfo rows still get recorded
+	-- on a later retry once their data arrives.
+	if buyout > 0 and stackSize > 0 then
+		if not private.tracedRowIndexes[index] then
+			private.tracedRowIndexes[index] = true
+			local unitBuyout = buyout / stackSize
+			private.query:_RecordBrowseUnitPrice(unitBuyout, buyout)
+			if _G.TSM_SCAN_TRACE then
+				if private.classicTraceNameFilter and private.classicTraceNameFilter[strlower(rawName)] then
+					TSMDBG.PriceLogRawAuction({
+						queryKind = private.query:GetScanPlanKind() or "LEGACY",
+						queryText = private.query._str or "",
+						page = private.query._page or 0,
+						rowIndex = index,
+						rawName = rawName,
+						itemLink = itemLink,
+						stackSize = stackSize,
+						stackBuyout = buyout,
+						unitBuyout = unitBuyout,
+						seller = seller,
+						timeLeft = timeLeft,
+						hasItemLink = itemLink and true or false,
+					})
+				end
+				local ps = private.scanTrace.pageStats
+				if not ps then
+					ps = { rows = 0, minUnit = nil, maxUnit = nil, minBuyout = nil, maxBuyout = nil, qtyMax = 0, stacksGt1 = 0, req = private.scanTrace.pendingReqDur, page = private.query._page or 0 }
+					private.scanTrace.pageStats = ps
+				end
+				ps.rows = ps.rows + 1
+				if not ps.minUnit or unitBuyout < ps.minUnit then
+					ps.minUnit = unitBuyout
+				end
+				if not ps.maxUnit or unitBuyout > ps.maxUnit then
+					ps.maxUnit = unitBuyout
+				end
+				if not ps.minBuyout or buyout < ps.minBuyout then
+					ps.minBuyout = buyout
+				end
+				if not ps.maxBuyout or buyout > ps.maxBuyout then
+					ps.maxBuyout = buyout
+				end
+				if stackSize > ps.qtyMax then
+					ps.qtyMax = stackSize
+				end
+				if stackSize > 1 then
+					ps.stacksGt1 = ps.stacksGt1 + 1
+				end
+			end
+		end
+	end
+
+	-- Class-batch queries: reject rows whose name matches none of the target
+	-- items right here, before the expensive link fetch and parsing. The name
+	-- comes free with GetAuctionItemInfo above.
+	if private.classicNameFilter and not private.classicNameFilter[strlower(rawName)] then
+		cs.nameReject = cs.nameReject + 1
+		return true
 	end
 
 	-- 3.3.5: Фильтруем по поисковой строке прямо здесь, как в Auctionator (не добавляем в browseResults, если не совпадает)
@@ -821,7 +1115,9 @@ function private.ProcessBrowseResultClassic(index)
 		return false
 	end
 
-	local baseItemString = ItemString.GetBase(itemLink)
+	tPhase = debugprofilestop()
+	local baseItemString = ItemString.Get(itemLink)
+	cs.tParse = cs.tParse + (debugprofilestop() - tPhase)
 	if not baseItemString then
 		cs.badLink = cs.badLink + 1
 		return false
@@ -834,18 +1130,23 @@ function private.ProcessBrowseResultClassic(index)
 		cs.earlyReject = cs.earlyReject + 1
 		return true
 	end
-	if not seller and private.resolveSellers then
-		if (private.sellerWaitCounts[index] or 0) < 2 then
+	if private.resolveSellers and (not seller or seller == "") then
+		if not private.sellerWaitStart then
+			private.sellerWaitStart = GetTime()
+		end
+		if GetTime() - private.sellerWaitStart < SELLER_WAIT_MAX_TIME then
 			private.sellerWaitCounts[index] = (private.sellerWaitCounts[index] or 0) + 1
 			return false
 		end
 		seller = "?"
 	end
+	tPhase = debugprofilestop()
 	private.query:_ProcessBrowseResult(baseItemString, itemLink)
 	private.query:_MarkDirtyRow(baseItemString)
 	local row = private.query:_GetBrowseResults(baseItemString)
 	local page = (private.query and private.query._page) or 0
 	row:PopulateSubRows(private.browseId, index, itemLink, page)
+	cs.tPopulate = cs.tPopulate + (debugprofilestop() - tPhase)
 	cs.added = cs.added + 1
 	-- Classic browse rows always have raw data for newly populated listings,
 	-- so no need to scan all existing subRows on every auction index.

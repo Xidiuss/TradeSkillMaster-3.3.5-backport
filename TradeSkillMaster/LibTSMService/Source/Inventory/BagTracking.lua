@@ -134,8 +134,10 @@ end
 ---Starts running the bag tracking code.
 function BagTracking.Start()
 	Event.Register("BAG_UPDATE", private.BagUpdateHandler)
-	if LibTSMService.IsPandaClassic() or LibTSMService.IsRetail() then
-		-- In Cata 4.4.0 and in Retail 10.0.5, BAG_UPDATE_DELAYED doesnt fire for non-backpack slots, so emulate it
+	if LibTSMService.IsPandaClassic() or LibTSMService.IsRetail() or LibTSMService.IsWrathClassic() then
+		-- In Cata 4.4.0 and in Retail 10.0.5, BAG_UPDATE_DELAYED doesnt fire for non-backpack slots, so emulate it.
+		-- On 3.3.5 BAG_UPDATE_DELAYED doesn't exist at all (added in 5.0.4), so without
+		-- the emulation the bag DB would stay frozen at its login-time state.
 		private.bagUpdateDelayedTimer = DelayTimer.New("BAG_TRACKING_BAG_UPDATE_DELAYED", private.BagUpdateDelayedHandler)
 		Event.Register("BAG_UPDATE", function() private.bagUpdateDelayedTimer:RunForFrames(0) end)
 	else
@@ -199,6 +201,11 @@ function BagTracking.RescanAllBags()
 		private.ScanBagOrBank(bag)
 	end
 	private.slotDB:SetQueryUpdatesPaused(false)
+	-- Flush the quantity callbacks synchronously: callers (e.g. Queue.RestockGroups)
+	-- read NumInventory right after this rescan, and the CustomString cache is
+	-- otherwise invalidated only by the 2-frame delayed callback, so they would
+	-- keep seeing the stale cached value.
+	private.DelayedBagTrackingQuantityCallback()
 end
 
 ---Creates a new query of auctionable items in the bags.
@@ -470,8 +477,12 @@ function private.HandleLogin()
 	query:Release()
 	private.quantityDB:SetQueryUpdatesPaused(false)
 
-	-- WoW does not fire an update event for the backpack when you log in, so trigger one
-	private.BagUpdateHandler(nil, 0)
+	-- WoW does not fire an update event for the backpack when you log in, so trigger one.
+	-- 3.3.5: the login-time BAG_UPDATE for the other bags is unreliable, so mark all
+	-- of them pending to guarantee a full scan (matches the comment above).
+	for bag = Container.GetBackpackContainer(), Container.GetNumBags() do
+		private.BagUpdateHandler(nil, bag)
+	end
 	private.BagUpdateDelayedHandler()
 	return true
 end

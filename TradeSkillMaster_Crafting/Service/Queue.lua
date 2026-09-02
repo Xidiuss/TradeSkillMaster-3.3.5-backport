@@ -17,8 +17,12 @@ local MatString = TSM.LibTSMTypes:Include("Crafting.MatString")
 local Group = TSM.LibTSMTypes:Include("Group")
 local CustomString = TSM.LibTSMTypes:Include("CustomString")
 local ChatMessage = TSM.LibTSMService:Include("UI.ChatMessage")
+local BagTracking = TSM.LibTSMService:Include("Inventory.BagTracking")
+local Auction = TSM.LibTSMService:Include("Auction")
+local Inventory = TSM.LibTSMApp:Include("Service.Inventory")
 local CraftingOperation = TSM.LibTSMSystem:Include("CraftingOperation")
 local AltTracking = TSM.LibTSMApp:Include("Service.AltTracking")
+local SessionInfo = TSM.LibTSMWoW:Include("Util.SessionInfo")
 local private = {
 	settings = nil,
 	db = nil,
@@ -164,6 +168,26 @@ function Queue.GetTotals()
 end
 
 function Queue.RestockGroups(groups)
+	-- 3.3.5: bag tracking events are unreliable at login, so force a synchronous
+	-- rescan to make sure NumInventory reflects items crafted since login.
+	BagTracking.RescanAllBags()
+	if _G.TSM_CRAFT_TRACE then
+		local ignoredChars = TempTable.Acquire()
+		for player, ignored in pairs(private.settings.ignoreCharacters) do
+			if ignored then
+				tinsert(ignoredChars, player)
+			end
+		end
+		local ignoredGuilds = TempTable.Acquire()
+		for guild, ignored in pairs(private.settings.ignoreGuilds) do
+			if ignored then
+				tinsert(ignoredGuilds, guild)
+			end
+		end
+		print(("[TSM RestockTrace] restock begin: ignoreCharacters=[%s] ignoreGuilds=[%s]"):format(table.concat(ignoredChars, ", "), table.concat(ignoredGuilds, ", ")))
+		TempTable.Release(ignoredChars)
+		TempTable.Release(ignoredGuilds)
+	end
 	private.db:SetQueryUpdatesPaused(true)
 	for _, groupPath in ipairs(groups) do
 		if groupPath ~= Group.GetRootPath() then
@@ -214,13 +238,18 @@ function private.RestockItem(itemString)
 	end
 
 	local haveQuantity = CustomString.GetSourceValue("NumInventory", itemString) or 0
+	local rawHaveQuantity = haveQuantity
 	for guild, ignored in pairs(private.settings.ignoreGuilds) do
 		if ignored then
 			haveQuantity = haveQuantity - AltTracking.GetGuildQuantity(itemString, guild)
 		end
 	end
 	for player, ignored in pairs(private.settings.ignoreCharacters) do
-		if ignored then
+		-- NumInventory always includes the current player's own inventory, so
+		-- subtracting it here (own character selected in the ignore list) would
+		-- cancel it out and make every owned item look missing - the restock queue
+		-- then re-adds everything the player already has.
+		if ignored and not SessionInfo.IsPlayer(player) then
 			haveQuantity = haveQuantity - AltTracking.GetBagQuantity(itemString, player)
 			haveQuantity = haveQuantity - AltTracking.GetBankQuantity(itemString, player)
 			haveQuantity = haveQuantity - AltTracking.GetAuctionQuantity(itemString, player)
@@ -233,6 +262,26 @@ function private.RestockItem(itemString)
 	-- assert ронял весь Restock Groups.
 	haveQuantity = max(haveQuantity, 0)
 	local neededQuantity = CraftingOperation.GetRestockQuantity(itemString, haveQuantity)
+	-- Diagnostic instrumentation toggled by "/tsmcraftdebug trace": raw is the
+	-- NumInventory source value (what the data layer holds), ignoredSub is how much
+	-- the ignore-characters/guilds lists subtracted, and have is the final value the
+	-- restock decision used. fresh/bag/ah are direct data-layer reads for comparison.
+	if _G.TSM_CRAFT_TRACE then
+		local freshQuantity = Inventory.GetTotalQuantity(itemString)
+		local ignoredSub = rawHaveQuantity - haveQuantity
+		print(("[TSM RestockTrace] %s raw=%d ignoredSub=%d have=%d fresh(data)=%d bag=%d ah=%d needed=%d%s%s"):format(
+			itemString,
+			rawHaveQuantity,
+			ignoredSub,
+			haveQuantity,
+			freshQuantity,
+			BagTracking.GetBagQuantity(itemString),
+			Auction.GetQuantity(itemString),
+			neededQuantity,
+			neededQuantity == 0 and " (skip)" or "",
+			ignoredSub > 0 and "  <<< IGNORED INVENTORY SUBTRACTED" or (rawHaveQuantity < freshQuantity and "  <<< STALE CACHE" or "")
+		))
+	end
 	if neededQuantity == 0 then
 		return
 	end

@@ -164,4 +164,3 @@ Core\UI\TaskListUI\Core.lua
 
 # Public APIs
 Core\API.lua
-

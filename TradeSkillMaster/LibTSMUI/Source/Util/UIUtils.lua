@@ -87,9 +87,10 @@ end
 ---@param tintPct? number The tintPct to apply to the quality color
 ---@return string
 function UIUtils.GetQualityColoredText(name, quality, craftedQuality, useMidnightIcon, tintPct)
-	if not name or not quality then
+	if not name then
 		return
 	end
+	quality = quality or 0
 	local color = Theme.GetItemQualityColor(quality)
 	local result = color:GetTint(tintPct or 0):ColorText(name)
 	local craftedQualityIcon = craftedQuality and TradeSkill.GetCraftedQualityChatIcon(craftedQuality, useMidnightIcon)

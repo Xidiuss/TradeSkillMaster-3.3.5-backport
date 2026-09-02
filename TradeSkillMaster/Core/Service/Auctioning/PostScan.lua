@@ -360,14 +360,24 @@ function private.ScanThread(auctionScan, scanContext)
 	TempTable.Release(nameLookup)
 	-- record this search
 	TSM.Auctioning.SavedSearches.RecordSearch(scanContext, scanContext.isItems and "postItems" or "postGroups")
+	if TSMDBG and TSMDBG.PriceLogBegin then
+		TSMDBG.PriceLogBegin("POST", #private.itemList)
+	end
 
 	-- run the scan
 	auctionScan:AddItemListQueriesThreaded(private.itemList)
 	for _, query in auctionScan:QueryIterator() do
-		query:SetIsBrowseDoneFunction(private.QueryIsBrowseDoneFunction)
+		local scanPlanKind = query:GetScanPlanKind()
+		if not scanPlanKind then
+			query:SetIsBrowseDoneFunction(private.QueryIsBrowseDoneFunction)
+		end
 		query:AddCustomFilter(private.QueryBuyoutFilter)
 	end
-	if not auctionScan:ScanQueriesThreaded() then
+	local scanSuccess = auctionScan:ScanQueriesThreaded()
+	if TSMDBG and TSMDBG.PriceLogEnd then
+		TSMDBG.PriceLogEnd("POST", scanSuccess)
+	end
+	if not scanSuccess then
 		ChatMessage.PrintUser(L["TSM failed to scan some auctions. Please rerun the scan."])
 	end
 end
@@ -546,7 +556,10 @@ function private.QueryIsBrowseDoneForItem(query, itemString)
 					maxItemBuyout = max(maxItemBuyout or 0, itemBuyout)
 				end
 			end
-			if numBuyouts <= 1 then
+			if numBuyouts == 0 then
+				-- Haven't seen this item yet (or it has no auctions), so can't stop
+				isFilterDone = false
+			elseif numBuyouts <= 1 and not query:IsPriceSorted() then
 				-- There is only one distinct item buyout, so can't stop yet
 				isFilterDone = false
 			elseif AuctioningOperation.ShouldKeepScanningForPosting(itemString, operationSettings, minItemBuyout, maxItemBuyout) then
@@ -579,7 +592,7 @@ function private.AuctionScanOnQueryDone(_, query)
 					if operationNumHave > 0 then
 						assert(not next(private.subRowsTemp))
 						TSM.Auctioning.Util.GetFilteredSubRows(query, itemString, operationSettings, private.subRowsTemp)
-						local reason, numUsed, itemBuyout, seller, auctionId = private.GeneratePosts(itemString, operationName, operationSettings, operationNumHave, private.subRowsTemp)
+						local reason, numUsed, itemBuyout, seller, auctionId = private.GeneratePosts(itemString, operationName, operationSettings, operationNumHave, private.subRowsTemp, query)
 						wipe(private.subRowsTemp)
 						numHave = numHave - (numUsed or 0)
 						seller = seller or ""
@@ -595,9 +608,10 @@ function private.AuctionScanOnQueryDone(_, query)
 	end
 end
 
-function private.GeneratePosts(itemString, operationName, operationSettings, numHave, subRows)
+function private.GeneratePosts(itemString, operationName, operationSettings, numHave, subRows, query)
 	local maxCanPost, perAuction, postCap = AuctioningOperation.GetPostQuantities(itemString, operationSettings, numHave)
 	if not maxCanPost then
+		private.PriceLogPostDecision(query, itemString, operationName, operationSettings, nil, nil, nil, AuctioningOperation.RESULT.NOT_POSTING.NOT_ENOUGH)
 		return AuctioningOperation.RESULT.NOT_POSTING.NOT_ENOUGH
 	end
 
@@ -606,6 +620,9 @@ function private.GeneratePosts(itemString, operationName, operationSettings, num
 		TempTable.Release(lowestAuction)
 		lowestAuction = nil
 	end
+	local marketBid = lowestAuction and lowestAuction.bid or nil
+	local marketBuyout = lowestAuction and lowestAuction.buyout or nil
+	local marketSeller = lowestAuction and lowestAuction.seller or nil
 	local reason, seller, bid, buyout, activeAuctionsBid, activeAuctionsBuyout = AuctioningOperation.MakePostDecision(itemString, lowestAuction, operationSettings, private.settings.matchWhitelist)
 	if reason == AuctioningOperation.RESULT.INVALID.SELLER then
 		ChatMessage.PrintfUser(L["The seller name of the lowest auction for %s was not given by the server. Skipping this item."], ItemInfo.GetLink(itemString))
@@ -618,6 +635,7 @@ function private.GeneratePosts(itemString, operationName, operationSettings, num
 		TempTable.Release(lowestAuction)
 	end
 	if reason ~= AuctioningOperation.RESULT.POSTING then
+		private.PriceLogPostDecision(query, itemString, operationName, operationSettings, marketBid, marketBuyout, marketSeller, reason)
 		return reason, nil, nil, seller
 	end
 	local activeAuctions = 0
@@ -652,11 +670,13 @@ function private.GeneratePosts(itemString, operationName, operationSettings, num
 		perAuction = min(postCap - activeAuctions, perAuction)
 	end
 	if maxCanPost <= 0 or perAuction <= 0 then
+		private.PriceLogPostDecision(query, itemString, operationName, operationSettings, marketBid, marketBuyout, marketSeller, AuctioningOperation.RESULT.POSTING_NOT_NEEDED.TOO_MANY)
 		return AuctioningOperation.RESULT.POSTING_NOT_NEEDED.TOO_MANY
 	end
 
 	if ClientInfo.HasFeature(ClientInfo.FEATURES.AH_STACKS) and (bid * perAuction > MAXIMUM_BID_PRICE or buyout * perAuction > MAXIMUM_BID_PRICE) then
 		ChatMessage.PrintfUser(L["The buyout price for %s would be above the maximum allowed price. Skipping this item."], ItemInfo.GetLink(itemString))
+		private.PriceLogPostDecision(query, itemString, operationName, operationSettings, marketBid, marketBuyout, marketSeller, AuctioningOperation.RESULT.INVALID.ITEM_GROUP.OTHER)
 		return AuctioningOperation.RESULT.INVALID.ITEM_GROUP.OTHER
 	end
 
@@ -692,7 +712,32 @@ function private.GeneratePosts(itemString, operationName, operationSettings, num
 	if extraStack > 0 then
 		private.AddToQueue(itemString, operationName, bid, buyout, extraStack, 1, postTime)
 	end
+	private.PriceLogPostDecision(query, itemString, operationName, operationSettings, marketBid, marketBuyout, marketSeller, reason, bid, buyout)
 	return reason, (perAuction * maxCanPost) + extraStack, buyout, seller, auctionId
+end
+
+function private.PriceLogPostDecision(query, itemString, operationName, operationSettings, marketBid, marketBuyout, marketSeller, decision, proposedBid, proposedBuyout)
+	if not _G.TSM_SCAN_TRACE or not TSMDBG or not TSMDBG.PriceLogDecision then
+		return
+	end
+	TSMDBG.PriceLogDecision("POST", {
+		itemString = itemString,
+		itemId = ItemString.ToId(itemString),
+		itemName = ItemInfo.GetName(itemString) or "",
+		operation = operationName,
+		marketBid = marketBid,
+		marketBuyout = marketBuyout,
+		marketSeller = marketSeller,
+		minPrice = AuctioningOperation.GetItemPrice(itemString, "minPrice", operationSettings),
+		normalPrice = AuctioningOperation.GetItemPrice(itemString, "normalPrice", operationSettings),
+		maxPrice = AuctioningOperation.GetItemPrice(itemString, "maxPrice", operationSettings),
+		undercut = AuctioningOperation.GetItemPrice(itemString, "undercut", operationSettings),
+		proposedBid = proposedBid,
+		proposedBuyout = proposedBuyout,
+		decision = decision and tostring(decision) or "NONE",
+		queryKind = query and (query:GetScanPlanKind() or "LEGACY") or "UNKNOWN",
+		queryEndReason = query and (query:GetEndReason() or "UNKNOWN") or "UNKNOWN",
+	})
 end
 
 function private.AddToQueue(itemString, operationName, itemBid, itemBuyout, stackSize, numStacks, postTime)

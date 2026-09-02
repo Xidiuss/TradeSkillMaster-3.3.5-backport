@@ -91,6 +91,9 @@ function VendorBuyScrollTable:SetQuery(query)
 		:MapToValue(query)
 		:CallFunction(self:__closure("_HandleQueryUpdate"))
 	)
+	self:AddCancellable(ItemInfo.GetPublisher()
+		:CallFunction(self:__closure("_HandleQueryUpdate"))
+	)
 	return self
 end
 

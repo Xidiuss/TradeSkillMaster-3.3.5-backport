@@ -1,0 +1,8 @@
+{
+  "name": "tsm-335-backport-tests",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "fengari": "0.1.5"
+  }
+}

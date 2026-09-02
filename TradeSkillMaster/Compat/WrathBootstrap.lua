@@ -21,9 +21,10 @@ if not _G.WOW_PROJECT_ID then
 	_G.WOW_PROJECT_ID = _G.WOW_PROJECT_WRATH_CLASSIC
 end
 
--- Enable global debug mode by default on 3.3.5a so all errors popup in copyable window
+-- Cross-addon error capture is diagnostic-only. Keep it opt-in through
+-- /tsm debug on so unrelated addon errors are not attributed to TSM.
 if _G.TSM_GLOBAL_DEBUG == nil then
-	_G.TSM_GLOBAL_DEBUG = true
+	_G.TSM_GLOBAL_DEBUG = false
 end
 
 -- ============================================================================
@@ -370,8 +371,8 @@ do
 end
 
 -- ============================================================================
--- C_Item.GetItemClassInfo (ClassicAPI provides GetItemSubClassInfo but not this)
--- Bridges to the global 3.3.5 GetItemClassInfo if present, otherwise static map.
+-- C_Item.GetItemClassInfo fallback for bundled / older ClassicAPI providers.
+-- Preserve an existing provider implementation because its IDs follow its Enum contract.
 -- ============================================================================
 
 if not _G.C_Item then _G.C_Item = {} end
@@ -427,22 +428,26 @@ do
 		[16] = "Glyph",
 	}
 
-	_G.C_Item.GetItemClassInfo = function(classID)
-		if type(_G.GetAuctionItemClasses) == "function" then
-			local ahIdx = MODERN_TO_AH_CLASS_INDEX[classID]
-			if ahIdx then
-				local name = select(ahIdx, _G.GetAuctionItemClasses())
-				if name and name ~= "" then
-					return name
+	if not _G.C_Item.GetItemClassInfo then
+		_G.C_Item.GetItemClassInfo = function(classID)
+			if type(_G.GetAuctionItemClasses) == "function" then
+				local ahIdx = MODERN_TO_AH_CLASS_INDEX[classID]
+				if ahIdx then
+					local name = select(ahIdx, _G.GetAuctionItemClasses())
+					if name and name ~= "" then
+						return name
+					end
 				end
 			end
+			if _G.GetLocale and (_G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW") then
+				return CLASS_NAMES_ZH[classID] or CLASS_NAMES_EN[classID]
+			end
+			return CLASS_NAMES_EN[classID]
 		end
-		if _G.GetLocale and (_G.GetLocale() == "zhCN" or _G.GetLocale() == "zhTW") then
-			return CLASS_NAMES_ZH[classID] or CLASS_NAMES_EN[classID]
-		end
-		return CLASS_NAMES_EN[classID]
 	end
-	_G.GetItemClassInfo = _G.C_Item.GetItemClassInfo
+	if not _G.GetItemClassInfo then
+		_G.GetItemClassInfo = _G.C_Item.GetItemClassInfo
+	end
 end
 
 -- ============================================================================

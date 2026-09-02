@@ -707,7 +707,7 @@ function AuctionBuyScan.__private:_ActionHandler(manager, state, action, ...)
 		assert(state.selectedAuction and state.selectedAuction:IsSubRow())
 		state.findHash = state.selectedAuction:GetHashes()
 		state.findHashIsSelection = true
-		
+
 		-- 3.3.5 instant selection fix (Auctionator-style):
 		-- If the selected auction is already present on the current live AH page,
 		-- resolve its matches synchronously INLINE without setting findResult = nil

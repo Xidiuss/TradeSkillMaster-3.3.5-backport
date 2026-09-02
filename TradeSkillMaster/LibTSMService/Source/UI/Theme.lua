@@ -432,9 +432,9 @@ function Theme.RefreshItemIconLinkInText(text)
 	if not text or text == "" then
 		return text
 	end
-	local path, rest = strmatch(text, "^|T(.-):(%d+):(%d+)|t(.*)$")
+	local path, rest = strmatch(text, "^|T(.-):%d+:%d+|t(.*)$")
 	if not path then
-		path, rest = strmatch(text, "^|T(.-):(%d+)|t(.*)$")
+		path, rest = strmatch(text, "^|T(.-):%d+|t(.*)$")
 	end
 	if path then
 		return Theme.GetItemIconLink(path)..rest

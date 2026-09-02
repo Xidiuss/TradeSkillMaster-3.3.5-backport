@@ -241,6 +241,14 @@ function AuctionScanManager:ScanQueriesThreaded()
 	local allSuccess = true
 	while self._queriesScanned < #self._queries do
 		local query = self._queries[self._queriesScanned + 1]
+		if self:_HasFullBrowseAncestor(query) then
+			-- A complete ancestor contains every result this fallback could add.
+			-- Count the skipped query for UI progress, but never browse or expose it
+			-- as a separately completed consumer query.
+			self._queriesScanned = self._queriesScanned + 1
+			self:_NotifyProgressUpdate()
+			self:_Pause()
+		else
 		-- Run the browse query
 		local querySuccess, numNewResults = self:_ProcessQuery(query)
 		if not querySuccess then
@@ -249,11 +257,25 @@ function AuctionScanManager:ScanQueriesThreaded()
 		end
 		self._queriesScanned = self._queriesScanned + 1
 		self:_NotifyProgressUpdate()
-		self:_SendActionScript("OnQueryDone")
-		if self._onQueryDoneHandler then
-			self:_onQueryDoneHandler(query, numNewResults)
+
+		local planKind = query:GetScanPlanKind()
+		local endReason = query:GetEndReason()
+		local hasFallback = planKind and self:_HasFallbackQuery(query) or false
+		local consumeResults = (not planKind and endReason ~= "INCOMPLETE") or endReason == "FULL"
+		local terminalFailure = (planKind and not endReason)
+			or ((endReason == "INCOMPLETE" or endReason == "EARLY") and not consumeResults and not hasFallback)
+		if terminalFailure then
+			allSuccess = false
+			break
+		end
+		if consumeResults then
+			self:_SendActionScript("OnQueryDone")
+			if self._onQueryDoneHandler then
+				self:_onQueryDoneHandler(query, numNewResults)
+			end
 		end
 		self:_Pause()
+		end
 	end
 
 	if allSuccess then
@@ -461,6 +483,26 @@ function AuctionScanManager.__private:_AddQuery(query)
 	query:SetResolveSellers(self._resolveSellers)
 	query:SetCallback(self._queryCallback)
 	tinsert(self._queries, query)
+end
+
+function AuctionScanManager.__private:_HasFullBrowseAncestor(query)
+	local parent = query:GetFallbackParent()
+	while parent do
+		if parent:HasCompletedFullBrowse() then
+			return true
+		end
+		parent = parent:GetFallbackParent()
+	end
+	return false
+end
+
+function AuctionScanManager.__private:_HasFallbackQuery(query)
+	for index = self._queriesScanned + 1, #self._queries do
+		if self._queries[index]:GetFallbackParent() == query then
+			return true
+		end
+	end
+	return false
 end
 
 function AuctionScanManager.__private:_Pause()

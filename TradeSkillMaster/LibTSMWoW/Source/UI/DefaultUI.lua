@@ -8,6 +8,7 @@ local LibTSMWoW = select(2, ...).LibTSMWoW
 local DefaultUI = LibTSMWoW:Init("UI.DefaultUI")
 local Event = LibTSMWoW:Include("Service.Event")
 local EnumType = LibTSMWoW:From("LibTSMUtil"):Include("BaseType.EnumType")
+local ClientInfo = LibTSMWoW:Include("Util.ClientInfo")
 local private = {
 	visible = {},
 	callbacks = {},
@@ -51,6 +52,28 @@ DefaultUI:OnModuleLoad(function()
 			private.HandleEvent(FRAMES.MERCHANT, false)
 		end
 	end)
+	if ClientInfo.IsVanillaClassic() or ClientInfo.IsBCClassic() or ClientInfo.IsWrathClassic() then
+		-- 3.3.5: PLAYER_INTERACTION_MANAGER_FRAME_* doesn't exist client-side, and the
+		-- external !!!ClassicAPI only dispatches its synthetic copy on its own internal
+		-- EventHandler bus, which never reaches this addon's event frames (its
+		-- PlayerInteractionFrameManager.ShowFrame is also never called, so the
+		-- hooksecurefunc above stays dead). Without the real events below, AH/mail/bank/
+		-- guild bank/merchant visibility stays false forever, which silently disabled
+		-- e.g. the owned-auctions scan (Scanner aborted on "AH not visible").
+		local function RegisterVisibilityEvent(event, frame, visible)
+			Event.Register(event, function() private.HandleEvent(frame, visible) end)
+		end
+		RegisterVisibilityEvent("MAIL_SHOW", FRAMES.MAIL, true)
+		RegisterVisibilityEvent("MAIL_CLOSED", FRAMES.MAIL, false)
+		RegisterVisibilityEvent("AUCTION_HOUSE_SHOW", FRAMES.AUCTION_HOUSE, true)
+		RegisterVisibilityEvent("AUCTION_HOUSE_CLOSED", FRAMES.AUCTION_HOUSE, false)
+		RegisterVisibilityEvent("BANKFRAME_OPENED", FRAMES.BANK, true)
+		RegisterVisibilityEvent("BANKFRAME_CLOSED", FRAMES.BANK, false)
+		RegisterVisibilityEvent("GUILDBANKFRAME_OPENED", FRAMES.GUILDBANK, true)
+		RegisterVisibilityEvent("GUILDBANKFRAME_CLOSED", FRAMES.GUILDBANK, false)
+		RegisterVisibilityEvent("MERCHANT_SHOW", FRAMES.MERCHANT, true)
+		RegisterVisibilityEvent("MERCHANT_CLOSED", FRAMES.MERCHANT, false)
+	end
 end)
 
 

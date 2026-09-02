@@ -306,6 +306,13 @@ function private.ActionHandler(manager, state, action, ...)
 		local frame = ...
 		assert(not state.frame)
 		state.frame = frame
+		if not ClientInfo.IsRetail() then
+			-- 3.3.5: login-time BAG_UPDATE for non-backpack bags is unreliable and bag
+			-- events can lag during play, so force a synchronous rescan whenever the
+			-- crafting UI opens to make craftability reflect current bag contents
+			-- (reopening the window is the natural user expectation of a refresh).
+			BagTracking.RescanAllBags()
+		end
 		assert(not state.professionType)
 		if private.IsProfessionLoaded() then
 			return manager:ProcessAction("ACTION_PROFESSION_LOADED")

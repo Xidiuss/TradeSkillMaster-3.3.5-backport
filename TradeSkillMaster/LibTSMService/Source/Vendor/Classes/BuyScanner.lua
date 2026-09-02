@@ -179,12 +179,27 @@ function private.MerchantUpdateEventHandler()
 end
 
 function private.UpdateMerchantDB()
+	local ItemInfo = LibTSMService:Include("Item.ItemInfo")
 	local needsRetry = false
 	private.db:TruncateAndBulkInsertStart()
 	for i = 1, Merchant.GetNumItems() do
-		local itemString = ItemString.Get(Merchant.GetItemLink(i))
+		local itemLink = Merchant.GetItemLink(i)
+		local itemString = ItemString.Get(itemLink)
+		local price, stackSize, numAvailable, name = Merchant.GetItemInfo(i)
+		if not itemString and name and ItemInfo.ItemNameToItemString then
+			itemString = ItemInfo.ItemNameToItemString(name)
+		end
 		if itemString then
-			local price, stackSize, numAvailable = Merchant.GetItemInfo(i)
+			if itemLink then
+				local linkName = strmatch(itemLink, "\124h%[(.+)%]\124h")
+				if linkName and linkName ~= "" then
+					name = linkName
+				end
+			end
+			if name and name ~= "" then
+				ItemInfo.StoreItemName(ItemString.GetBaseFast(itemString), name)
+			end
+			ItemInfo.FetchInfo(itemString)
 			assert(#private.costItemTemp == 0 and #private.costQuantityTemp == 0)
 			for j = 1, Merchant.GetNumCostItems(i) do
 				local costItemLink, costNum = Merchant.GetCostItemInfo(i, j)

@@ -1396,25 +1396,35 @@ function private.InformationSearchOnValueChanged(input)
 	if private.itemSearch == value or value == "" then
 		return
 	end
+	local baseFrame = input:GetBaseElement()
 	private.BaseSearchOnValueChanged(input)
-	private.frame:GetBaseElement():GetElement("content.groups.view.content.header.input")
+	baseFrame:GetElement("content.groups.view.content.header.input")
 		:SetFocused(true)
 		:ClearHighlight()
 end
 
+-- 3.3.5: ItemInfo.GetTexture возвращает строку-путь, на retail число fileID.
+-- Подбираем actual тип чтобы schema не падал на assert defaultValue.
+local function GetTextureFieldTypeAndDefault()
+	local unknown = ItemInfo.GetTexture(ItemString.GetUnknown())
+	return type(unknown) == "number" and "number" or "string", unknown
+end
+
 function private.UpdateBaseItemInfoQuery()
+	local textureType, unknownTexture = GetTextureFieldTypeAndDefault()
 	local shouldPause = private.baseItemInfoQuery ~= nil
 	if shouldPause then
 		private.baseItemInfoQuery:SetUpdatesPaused(true)
 	end
 	private.baseItemInfoQuery = ItemInfo.MatchItemFilterQuery(private.itemFilter, private.baseItemInfoQuery)
-		:Select("ungroupedItemString", "texture", "coloredItemName")
+		:Select("ungroupedItemString", "resolvedTexture", "coloredItemName")
 		:VirtualSmartMapField("ungroupedItemString", private.ungroupedItemStringSmartMap, "itemString")
 		:Distinct("ungroupedItemString")
 		:LeftJoin(Group.GetItemDBForJoin(), "ungroupedItemString", "itemString")
 		:IsNil("groupPath")
 		:Equal("isBOP", 0)
 		:OrderBy("name", true)
+		:VirtualField("resolvedTexture", textureType, ItemInfo.GetTexture, "ungroupedItemString", unknownTexture)
 		:VirtualField("coloredItemName", "string", UIUtils.GetDisplayItemName, "itemString", Theme.GetColor("FEEDBACK_RED"):ColorText("?"))
 	if shouldPause then
 		private.baseItemInfoQuery:SetUpdatesPaused(false)
@@ -1426,13 +1436,14 @@ function private.BaseSearchOnValueChanged(input)
 	if private.itemSearch == value or value == "" then
 		return
 	end
+	local baseFrame = input:GetBaseElement()
 	local isValid = private.itemFilter:ParseStr(value)
 	assert(isValid)
 	private.itemFilterSmartMap:Invalidate()
 	private.itemSearch = value
 	private.UpdateBaseItemInfoQuery()
-	private.frame:GetBaseElement():GetElement("content.groups.view"):SetPath("search", true)
-	private.frame:GetBaseElement():GetElement("content.groups.view.content.header2.label")
+	baseFrame:GetElement("content.groups.view"):SetPath("search", true)
+	baseFrame:GetElement("content.groups.view.content.header2.label")
 		:SetText(format(L["%d Results"], private.baseItemInfoQuery:Count()))
 		:Draw()
 end
@@ -1749,13 +1760,6 @@ end
 -- ============================================================================
 -- Private Helper Functions
 -- ============================================================================
-
--- 3.3.5: ItemInfo.GetTexture возвращает строку-путь, на retail число fileID.
--- Подбираем actual тип чтобы schema не падал на assert defaultValue.
-local function GetTextureFieldTypeAndDefault()
-	local unknown = ItemInfo.GetTexture(ItemString.GetUnknown())
-	return type(unknown) == "number" and "number" or "string", unknown
-end
 
 function private.CreateUngroupedBagItemQuery()
 	-- 3.3.5: the login/BAG_UPDATE events for non-backpack bags are unreliable, so the

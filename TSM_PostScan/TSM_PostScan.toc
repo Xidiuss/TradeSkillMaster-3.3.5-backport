@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: |cff00fe00TSM Post Scan Log|r
+## Notes: Separate POST scan diagnostics for TradeSkillMaster.
+## Author: Keoo
+## Version: 1.0.0
+## Dependencies: TradeSkillMaster
+## SavedVariables: TSMPostScanLogDB
+
+Core.lua
