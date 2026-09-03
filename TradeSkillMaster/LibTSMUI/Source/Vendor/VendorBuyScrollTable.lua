@@ -12,6 +12,8 @@ local UIUtils = LibTSMUI:Include("Util.UIUtils")
 local ItemInfo = LibTSMUI:From("LibTSMService"):Include("Item.ItemInfo")
 local Theme = LibTSMUI:From("LibTSMService"):Include("UI.Theme")
 local Vendor = LibTSMUI:From("LibTSMService"):Include("Vendor")
+local DelayTimer = LibTSMUI:From("LibTSMWoW"):IncludeClassType("DelayTimer")
+local ITEM_INFO_UPDATE_DELAY = 0.3
 local COL_INFO = {
 	qty = {
 		title = L["Qty"],
@@ -62,9 +64,13 @@ function VendorBuyScrollTable:__init()
 	self.__super:__init(COL_INFO)
 	self._customSourceItemStringDataCol = "item_tooltip"
 	self._query = nil
+	self._itemStringSet = {}
+	self._itemInfoUpdateTimer = DelayTimer.New("VENDOR_BUY_ITEM_INFO_UPDATE", self:__closure("_HandleItemInfoUpdateDelayed"))
 end
 
 function VendorBuyScrollTable:Release()
+	self._itemInfoUpdateTimer:Cancel()
+	wipe(self._itemStringSet)
 	local query = self._query
 	self._query = nil
 	self.__super:Release()
@@ -92,7 +98,7 @@ function VendorBuyScrollTable:SetQuery(query)
 		:CallFunction(self:__closure("_HandleQueryUpdate"))
 	)
 	self:AddCancellable(ItemInfo.GetPublisher()
-		:CallFunction(self:__closure("_HandleQueryUpdate"))
+		:CallFunction(self:__closure("_HandleItemInfoUpdate"))
 	)
 	return self
 end
@@ -116,6 +122,22 @@ end
 -- Protected/Private Class Methods
 -- ============================================================================
 
+function VendorBuyScrollTable.__private:_HandleItemInfoUpdate(itemString)
+	if not self._query or not self._itemStringSet[itemString] then
+		return
+	end
+	-- ItemInfo getters used while rebuilding the table may synchronously publish
+	-- another cache update, and large batches can arrive over many frames. Batch
+	-- those updates to avoid rebuilding the entire table every frame.
+	self._itemInfoUpdateTimer:RunForTime(ITEM_INFO_UPDATE_DELAY)
+end
+
+function VendorBuyScrollTable.__private:_HandleItemInfoUpdateDelayed()
+	if self._query then
+		self:_HandleQueryUpdate()
+	end
+end
+
 function VendorBuyScrollTable.__private:_HandleQueryUpdate()
 	-- TODO: Optimize this using diffs
 	for _, tbl in pairs(self._data) do
@@ -123,7 +145,14 @@ function VendorBuyScrollTable.__private:_HandleQueryUpdate()
 	end
 	wipe(self._createGroupsData)
 	for _, row in self._query:Iterator() do
-		local stackSize, itemString, numAvailable, itemLevel, index = row:GetFields("stackSize", "itemString", "numAvailable", "itemLevel", "index")
+		local stackSize, itemString, numAvailable, itemLevel, index, baseItemString, merchantName = row:GetFields("stackSize", "itemString", "numAvailable", "itemLevel", "index", "baseItemString", "merchantName")
+		-- ItemInfo is a global stream. Keep local O(1) membership so unrelated cache
+		-- updates don't create one or two Vendor DB queries apiece. Preserve entries
+		-- across filtering: an unresolved name may start matching once its info lands.
+		self._itemStringSet[itemString] = true
+		if baseItemString then
+			self._itemStringSet[baseItemString] = true
+		end
 		tinsert(self._data.qty, stackSize)
 		-- 3.3.5: ItemInfo cache часто пуст для свежих vendor предметов (GetItemInfo async).
 		-- Fallback: _G.GetItemIcon(itemId) возвращает icon path синхронно даже если предмет
@@ -136,7 +165,11 @@ function VendorBuyScrollTable.__private:_HandleQueryUpdate()
 			end
 		end
 		texture = texture or "Interface\\Icons\\INV_Misc_QuestionMark"
-		local itemText = Theme.GetItemIconLink(texture).." "..(UIUtils.GetDisplayItemName(itemString) or "?")
+		local displayName = UIUtils.GetDisplayItemName(itemString)
+		if not displayName and merchantName ~= "" then
+			displayName = merchantName
+		end
+		local itemText = Theme.GetItemIconLink(texture).." "..(displayName or "?")
 		if numAvailable > 0 then
 			itemText = itemText..Theme.GetColor("FEEDBACK_RED"):ColorText(" ("..numAvailable..")")
 		elseif numAvailable ~= -1 then

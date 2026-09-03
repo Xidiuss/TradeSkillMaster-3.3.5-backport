@@ -43,6 +43,8 @@ end
 ---@return number price
 ---@return number stackSize
 ---@return number numAvailable
+---@return string? name
+---@return number|string? texture
 function Merchant.GetItemInfo(index)
 	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_MERCHANTFRAME) then
 		local info = C_MerchantFrame.GetItemInfo(index)

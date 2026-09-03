@@ -106,7 +106,17 @@ function Tooltip.Show(parent, data, noWrapping, xOffset)
 			end
 		end
 	elseif type(data) == "string" and (strfind(data, "^\124c.+\124Hitem:") or ItemString.IsItem(data)) then
-		GameTooltip:SetHyperlink(ItemInfo.GetLink(data))
+		local link = nil
+		if strfind(data, "^\124c.+\124Hitem:") then
+			link = data
+		elseif ItemInfo.GetName(data) then
+			-- GetName() also starts an asynchronous cache fetch on Classic.
+			link = ItemInfo.GetLink(data)
+		end
+		if type(link) ~= "string" or link == "" then
+			return
+		end
+		GameTooltip:SetHyperlink(link)
 		showCompare = true
 	elseif type(data) == "string" and (strfind(data, "^\124c.+\124Hbattlepet:") or ItemString.IsPet(data)) then
 		if not ClientInfo.HasFeature(ClientInfo.FEATURES.BATTLE_PETS) then

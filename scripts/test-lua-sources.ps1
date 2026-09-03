@@ -38,5 +38,10 @@ if ($LASTEXITCODE -ne 0) {
 	exit 1
 }
 
+node (Join-Path $scriptDir "lua-tests\run-vendor-fix-tests.js")
+if ($LASTEXITCODE -ne 0) {
+	exit 1
+}
+
 node (Join-Path $scriptDir "lua-tests\run-auctioning-operation-guard-tests.js")
 exit $LASTEXITCODE

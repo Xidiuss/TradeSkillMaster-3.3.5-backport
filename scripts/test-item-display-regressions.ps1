@@ -149,50 +149,6 @@ if (-not $refreshMatch.Success) {
 	}
 }
 
-# Merchant rows may arrive before the regular ItemInfo cache is populated on
-# 3.3.5. The active (TOC-loaded) modules must retain the synchronous merchant
-# name and publish a redraw after the async cache catches up.
-$merchantText = Get-Content -LiteralPath (Join-Path $projectRoot "TradeSkillMaster\LibTSMWoW\Source\API\Merchant.lua") -Raw
-if ($merchantText -notmatch 'return info\.price, info\.stackCount, info\.numAvailable, info\.name, info\.texture' -or
-	$merchantText -notmatch 'local name, texture, price, stackSize, numAvailable = GetMerchantItemInfo\(index\)' -or
-	$merchantText -notmatch 'return price, stackSize, numAvailable, name, texture') {
-	Add-Failure "Aktywny adapter Merchant nie przekazuje nazwy i tekstury przedmiotu z API 3.3.5."
-}
-
-$buyScannerText = Get-Content -LiteralPath (Join-Path $projectRoot "TradeSkillMaster\LibTSMService\Source\Vendor\Classes\BuyScanner.lua") -Raw
-$updateMerchantIndex = $buyScannerText.IndexOf('function private.UpdateMerchantDB()')
-$lazyItemInfoIndex = $buyScannerText.IndexOf('local ItemInfo = LibTSMService:Include("Item.ItemInfo")', [Math]::Max(0, $updateMerchantIndex))
-if ($updateMerchantIndex -lt 0 -or $lazyItemInfoIndex -lt $updateMerchantIndex) {
-	Add-Failure "Aktywny BuyScanner nie ładuje ItemInfo bezpiecznie po inicjalizacji modułów."
-}
-foreach ($expectedPattern in @(
-	'local itemLink = Merchant\.GetItemLink\(i\)',
-	'local price, stackSize, numAvailable, name = Merchant\.GetItemInfo\(i\)',
-	'ItemInfo\.StoreItemName\(ItemString\.GetBaseFast\(itemString\), name\)',
-	'ItemInfo\.FetchInfo\(itemString\)'
-)) {
-	if ($buyScannerText -notmatch $expectedPattern) {
-		Add-Failure "Aktywny BuyScanner nie zachowuje kontraktu nazw vendora: $expectedPattern."
-	}
-}
-
-$uiUtilsText = Get-Content -LiteralPath (Join-Path $projectRoot "TradeSkillMaster\LibTSMUI\Source\Util\UIUtils.lua") -Raw
-if ($uiUtilsText -notmatch 'if not name then' -or $uiUtilsText -notmatch 'quality = quality or 0') {
-	Add-Failure "UIUtils odrzuca nazwę vendora, gdy jakość przedmiotu nie jest jeszcze w cache."
-}
-
-foreach ($relativePath in @(
-	"TradeSkillMaster\LibTSMUI\Source\Vendor\VendorBuyScrollTable.lua",
-	"TradeSkillMaster\LibTSMUI\Source\Vendor\VendorBuybackScrollTable.lua",
-	"TradeSkillMaster\LibTSMUI\Source\Vendor\VendorSellScrollTable.lua"
-)) {
-	$vendorTableText = Get-Content -LiteralPath (Join-Path $projectRoot $relativePath) -Raw
-	if ($vendorTableText -notmatch 'ItemInfo\.GetPublisher\(\)' -or
-		$vendorTableText -notmatch ':CallFunction\(self:__closure\("_HandleQueryUpdate"\)\)') {
-		Add-Failure "$relativePath nie odświeża tabeli po uzupełnieniu ItemInfo."
-	}
-}
-
 if ($failures.Count -gt 0) {
 	Write-Host "FAIL: regresje wyświetlania przedmiotów:" -ForegroundColor Red
 	foreach ($failure in $failures) {
@@ -201,4 +157,4 @@ if ($failures.Count -gt 0) {
 	exit 1
 }
 
-Write-Host "PASS: Base Group, Theme oraz aktywne widoki vendora zachowują ikony i nazwy przedmiotów."
+Write-Host "PASS: Base Group przekazuje rozwiązaną teksturę, a Theme zachowuje nazwy przedmiotów."

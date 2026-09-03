@@ -35,6 +35,7 @@ BuyScanner:OnModuleLoad(function()
 	private.db = Database.NewSchema("VENDOR_ITEMS")
 		:AddUniqueNumberField("index")
 		:AddStringField("itemString")
+		:AddStringField("merchantName")
 		:AddSmartMapField("baseItemString", ItemString.GetBaseMap(), "itemString")
 		:AddNumberField("price")
 		:AddStringListField("costItems")
@@ -179,27 +180,12 @@ function private.MerchantUpdateEventHandler()
 end
 
 function private.UpdateMerchantDB()
-	local ItemInfo = LibTSMService:Include("Item.ItemInfo")
 	local needsRetry = false
 	private.db:TruncateAndBulkInsertStart()
 	for i = 1, Merchant.GetNumItems() do
-		local itemLink = Merchant.GetItemLink(i)
-		local itemString = ItemString.Get(itemLink)
-		local price, stackSize, numAvailable, name = Merchant.GetItemInfo(i)
-		if not itemString and name and ItemInfo.ItemNameToItemString then
-			itemString = ItemInfo.ItemNameToItemString(name)
-		end
+		local itemString = ItemString.Get(Merchant.GetItemLink(i))
 		if itemString then
-			if itemLink then
-				local linkName = strmatch(itemLink, "\124h%[(.+)%]\124h")
-				if linkName and linkName ~= "" then
-					name = linkName
-				end
-			end
-			if name and name ~= "" then
-				ItemInfo.StoreItemName(ItemString.GetBaseFast(itemString), name)
-			end
-			ItemInfo.FetchInfo(itemString)
+			local price, stackSize, numAvailable, merchantName = Merchant.GetItemInfo(i)
 			assert(#private.costItemTemp == 0 and #private.costQuantityTemp == 0)
 			for j = 1, Merchant.GetNumCostItems(i) do
 				local costItemLink, costNum = Merchant.GetCostItemInfo(i, j)
@@ -212,7 +198,7 @@ function private.UpdateMerchantDB()
 					tinsert(private.costQuantityTemp, costNum)
 				end
 			end
-			private.db:BulkInsertNewRow(i, itemString, price, private.costItemTemp, private.costQuantityTemp, stackSize, numAvailable)
+			private.db:BulkInsertNewRow(i, itemString, merchantName or "", price, private.costItemTemp, private.costQuantityTemp, stackSize, numAvailable)
 			wipe(private.costItemTemp)
 			wipe(private.costQuantityTemp)
 		end
