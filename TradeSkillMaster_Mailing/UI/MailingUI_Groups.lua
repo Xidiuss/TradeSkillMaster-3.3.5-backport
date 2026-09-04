@@ -207,13 +207,19 @@ end
 function private.FSMCreate()
 	local fsmContext = {
 		frame = nil,
-		sending = false
+		sending = false,
+		sendRepeat = false
 	}
 
 	local function UpdateButton(context)
 		context.frame:GetElement("bottom.mailGroupBtn")
 			:SetText(context.sending and L["Sending..."] or L["Mail Selected Groups"])
-			:SetPressed(context.sending)
+			-- 3.3.5: SetPressed(true) ustawia pressedModifier ("SHIFT"/"CTRL"/"NONE",
+			-- zawsze truthy), a widget wtedy disabluje natywny frame i drugie kliknięcie
+			-- nigdy nie dociera do FSM. Przy auto-resend przycisk musi zostać klikalny
+			-- (anulowanie drugim klikiem); pojedyncze wysyłki zachowują upstreamowy
+			-- wciśnięty wygląd + blokadę.
+			:SetPressed(context.sending and not context.sendRepeat)
 			:Draw()
 	end
 
@@ -242,6 +248,7 @@ function private.FSMCreate()
 		:AddState(FSM.NewState("ST_SENDING_START")
 			:SetOnEnter(function(context, sendRepeat, isDryRun)
 				context.sending = true
+				context.sendRepeat = sendRepeat and true or false
 				local groups = TempTable.Acquire()
 				for _, groupPath in context.frame:GetElement("groupTree"):SelectedGroupsIterator() do
 					tinsert(groups, groupPath)
@@ -255,10 +262,26 @@ function private.FSMCreate()
 			end)
 			:SetOnExit(function(context)
 				context.sending = false
+				context.sendRepeat = false
 			end)
 			:AddTransition("ST_SHOWN")
 			:AddTransition("ST_HIDDEN")
 			:AddEventTransition("EV_SENDING_DONE", "ST_SHOWN")
+			-- 3.3.5: auto-resend (SHIFT) to nieskończona pętla wątku, więc bez tego
+			-- przycisk wisiał na "Sending..." do zamknięcia okna. Drugie kliknięcie
+			-- (przycisk celowo klikalny tylko w tym trybie, patrz UpdateButton)
+			-- zabija wątki i wraca do gotowości. Zwrot pojedynczego stringa to gęsta
+			-- krotka bez varargów do forwardu (klasa nil-hole tu nie występuje).
+			-- Bramka na sendRepeat: przypadkowy podwójny klik pojedynczej wysyłki
+			-- jest ignorowany (brak tranzycji), żeby nie zabić świeżo startego sendu.
+			:AddEvent("EV_BUTTON_CLICKED", function(context)
+				if not context.sendRepeat then
+					return
+				end
+				TSM.Mailing.Send.KillThread()
+				TSM.Mailing.Groups.KillThread()
+				return "ST_SHOWN"
+			end)
 		)
 		:AddDefaultEventTransition("EV_FRAME_HIDE", "ST_HIDDEN")
 		:Init("ST_HIDDEN", fsmContext)
