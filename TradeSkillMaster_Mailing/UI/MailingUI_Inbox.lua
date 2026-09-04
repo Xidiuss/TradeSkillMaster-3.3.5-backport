@@ -792,13 +792,20 @@ end
 function private.OpenBtnOnClick(button)
 	local filterType = button:GetContext()
 	button:SetPressed(true)
+	-- 3.3.5: IsShiftKeyDown()/IsControlKeyDown() return 1/nil - normalize to
+	-- explicit booleans, otherwise a nil hole truncates FSM TempTable varargs
+	-- (unpack stops at first nil) and filterType is lost -> Open All.
+	local shiftDown = IsShiftKeyDown() and true or false
+	local ctrlDown = IsControlKeyDown() and true or false
 	local openAll = nil
 	if ClientInfo.IsRetail() then
-		openAll = not IsShiftKeyDown()
+		openAll = not shiftDown
 	else
-		openAll = IsShiftKeyDown()
+		openAll = shiftDown
 	end
-	private.fsm:ProcessEvent("EV_BUTTON_CLICKED", openAll, not filterType and IsControlKeyDown(), private.filterText, filterType)
+	local keepMoney = (not filterType and ctrlDown) or false
+	local filterText = private.filterText or ""
+	private.fsm:ProcessEvent("EV_BUTTON_CLICKED", openAll, keepMoney, filterText, filterType)
 end
 
 function private.MailsOnRowClick(scrollTable, index)
