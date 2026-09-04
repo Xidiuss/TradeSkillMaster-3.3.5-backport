@@ -190,7 +190,12 @@ function private.GroupTreeOnGroupSelectionChanged(groupTree)
 end
 
 function private.MailBtnOnClick(button)
-	private.fsm:ProcessEvent("EV_BUTTON_CLICKED", IsShiftKeyDown(), IsControlKeyDown())
+	-- 3.3.5: IsShiftKeyDown()/IsControlKeyDown() return 1/nil - normalize to
+	-- explicit booleans, otherwise a nil hole truncates FSM TempTable varargs
+	-- (unpack stops at first nil) and isDryRun is lost on CTRL-only click.
+	local sendRepeat = IsShiftKeyDown() and true or false
+	local isDryRun = IsControlKeyDown() and true or false
+	private.fsm:ProcessEvent("EV_BUTTON_CLICKED", sendRepeat, isDryRun)
 end
 
 
