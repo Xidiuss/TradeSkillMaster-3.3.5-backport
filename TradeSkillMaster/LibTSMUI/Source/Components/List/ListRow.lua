@@ -226,6 +226,14 @@ function ListRow:GetDataIndex()
 	return self._dataIndex
 end
 
+---Gets whether or not the row is currently bound to the given data index.
+---Unlike GetDataIndex, this is safe to call on rows which have no index.
+---@param dataIndex number The data index
+---@return boolean
+function ListRow:HasDataIndex(dataIndex)
+	return self._dataIndex == dataIndex
+end
+
 ---Sets whether or not highlighting is enabled.
 function ListRow:SetHighlightEnabled(enabled)
 	self._state.highlightDisabled = not enabled

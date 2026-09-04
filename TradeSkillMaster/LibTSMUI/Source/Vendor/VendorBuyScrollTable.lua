@@ -66,10 +66,20 @@ function VendorBuyScrollTable:__init()
 	self._query = nil
 	self._itemStringSet = {}
 	self._inQueryUpdate = false
+	-- Rescans (MERCHANT_UPDATE burst after BUY) usually rebind every visible row to
+	-- the same index. Skip the Hide/Show focus cycle then: content is still redrawn,
+	-- but the hovered row keeps its tooltip instead of flickering it (Leave/Enter).
+	self._skipSameIndexHideShow = true
 	self._itemInfoUpdateTimer = DelayTimer.New("VENDOR_BUY_ITEM_INFO_UPDATE", self:__closure("_HandleItemInfoUpdateDelayed"))
 end
 
 function VendorBuyScrollTable:Release()
+	-- 3.3.5a backport: same double-release hazard as Element:Release (frame teardown
+	-- can visit an already released/recycled child). Must no-op before touching any
+	-- fields: only this table's Release dereferences an object (timer:Cancel()).
+	if not self._acquired then
+		return
+	end
 	self._itemInfoUpdateTimer:Cancel()
 	self._inQueryUpdate = false
 	wipe(self._itemStringSet)

@@ -73,6 +73,10 @@ function List:__init()
 	self._rowHeight = nil
 	self._rowElements = {} ---@type ListRow[]
 	self._numRows = 0
+	-- When true, _DrawRows rebinds a row without Hide/Show if its data index is
+	-- unchanged (content is still redrawn). Default false: preserves the upstream
+	-- OnLeave/OnEnter refresh semantics everywhere; individual tables opt in.
+	self._skipSameIndexHideShow = false
 	self._hScrollValue = 0
 	self._vScrollValue = 0
 	self._prevDataOffset = nil
@@ -395,7 +399,13 @@ function List.__protected:_DrawRows(startRowIndex, endRowIndex)
 		assert(dataIndex <= self._numRows)
 		local row = self._rowElements[i]
 		if row then
-			row:SetDataIndex(dataIndex)
+			if self._skipSameIndexHideShow and row:HasDataIndex(dataIndex) then
+				-- Same binding: redraw content below without the Hide/Show
+				-- focus cycle (no OnLeave/OnEnter, no tooltip flicker).
+				row:UpdateDataIndex(dataIndex)
+			else
+				row:SetDataIndex(dataIndex)
+			end
 			self:_HandleRowDraw(row)
 		end
 	end
