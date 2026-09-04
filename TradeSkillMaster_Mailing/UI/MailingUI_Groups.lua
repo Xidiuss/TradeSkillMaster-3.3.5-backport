@@ -212,14 +212,17 @@ function private.FSMCreate()
 	}
 
 	local function UpdateButton(context)
+		-- 3.3.5: SetPressed(true) sets pressedModifier ("SHIFT"/"CTRL"/"NONE",
+		-- always truthy), which disables the native frame, so a second click would
+		-- never reach the FSM. While auto-resending the button must stay clickable
+		-- (second click cancels); single sends keep the upstream pressed look lock.
+		-- A locked "INDICATOR" highlight reproduces the yellow pressed styling
+		-- (FULL_BLACK text) without disabling the button.
+		local resending = context.sending and context.sendRepeat
 		context.frame:GetElement("bottom.mailGroupBtn")
 			:SetText(context.sending and L["Sending..."] or L["Mail Selected Groups"])
-			-- 3.3.5: SetPressed(true) ustawia pressedModifier ("SHIFT"/"CTRL"/"NONE",
-			-- zawsze truthy), a widget wtedy disabluje natywny frame i drugie kliknięcie
-			-- nigdy nie dociera do FSM. Przy auto-resend przycisk musi zostać klikalny
-			-- (anulowanie drugim klikiem); pojedyncze wysyłki zachowują upstreamowy
-			-- wciśnięty wygląd + blokadę.
 			:SetPressed(context.sending and not context.sendRepeat)
+			:SetHighlightLocked(resending, resending and "INDICATOR" or nil)
 			:Draw()
 	end
 
@@ -267,13 +270,13 @@ function private.FSMCreate()
 			:AddTransition("ST_SHOWN")
 			:AddTransition("ST_HIDDEN")
 			:AddEventTransition("EV_SENDING_DONE", "ST_SHOWN")
-			-- 3.3.5: auto-resend (SHIFT) to nieskończona pętla wątku, więc bez tego
-			-- przycisk wisiał na "Sending..." do zamknięcia okna. Drugie kliknięcie
-			-- (przycisk celowo klikalny tylko w tym trybie, patrz UpdateButton)
-			-- zabija wątki i wraca do gotowości. Zwrot pojedynczego stringa to gęsta
-			-- krotka bez varargów do forwardu (klasa nil-hole tu nie występuje).
-			-- Bramka na sendRepeat: przypadkowy podwójny klik pojedynczej wysyłki
-			-- jest ignorowany (brak tranzycji), żeby nie zabić świeżo startego sendu.
+			-- 3.3.5: auto-resend (SHIFT) is an endless thread loop, so without this
+			-- the button stayed on "Sending..." until the window was closed. A second
+			-- click (the button is intentionally left clickable only in this mode,
+			-- see UpdateButton) kills the threads and returns to idle. Returning a
+			-- single string is a dense tuple with no forwarded varargs (no nil-hole
+			-- class issue here). The sendRepeat gate ignores stray double-clicks on
+			-- single sends (no transition), so a fresh send can't be killed by accident.
 			:AddEvent("EV_BUTTON_CLICKED", function(context)
 				if not context.sendRepeat then
 					return
