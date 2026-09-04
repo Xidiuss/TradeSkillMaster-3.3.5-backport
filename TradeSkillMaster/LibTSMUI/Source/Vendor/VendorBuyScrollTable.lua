@@ -65,11 +65,13 @@ function VendorBuyScrollTable:__init()
 	self._customSourceItemStringDataCol = "item_tooltip"
 	self._query = nil
 	self._itemStringSet = {}
+	self._inQueryUpdate = false
 	self._itemInfoUpdateTimer = DelayTimer.New("VENDOR_BUY_ITEM_INFO_UPDATE", self:__closure("_HandleItemInfoUpdateDelayed"))
 end
 
 function VendorBuyScrollTable:Release()
 	self._itemInfoUpdateTimer:Cancel()
+	self._inQueryUpdate = false
 	wipe(self._itemStringSet)
 	local query = self._query
 	self._query = nil
@@ -123,6 +125,10 @@ end
 -- ============================================================================
 
 function VendorBuyScrollTable.__private:_HandleItemInfoUpdate(itemString)
+	if self._inQueryUpdate then
+		-- PRODFIX-H3: synchronous self-echo from our own rebuild getters below; not new data, so don't re-arm.
+		return
+	end
 	if not self._query or not self._itemStringSet[itemString] then
 		return
 	end
@@ -144,6 +150,10 @@ function VendorBuyScrollTable.__private:_HandleQueryUpdate()
 		wipe(tbl)
 	end
 	wipe(self._createGroupsData)
+	-- PRODFIX-H3 (vendor churn): getters in the loop (ItemInfo/UIUtils/VendorUIUtils) may
+	-- synchronously publish ItemInfo updates for rows just read. WoW is single-threaded,
+	-- so anything arriving while this flag is set is our own echo, not new external data.
+	self._inQueryUpdate = true
 	for _, row in self._query:Iterator() do
 		local stackSize, itemString, numAvailable, itemLevel, index, baseItemString, merchantName = row:GetFields("stackSize", "itemString", "numAvailable", "itemLevel", "index", "baseItemString", "merchantName")
 		-- ItemInfo is a global stream. Keep local O(1) membership so unrelated cache
@@ -182,6 +192,7 @@ function VendorBuyScrollTable.__private:_HandleQueryUpdate()
 		tinsert(self._data.cost_tooltip, row:GetField("costItems") or false)
 		self._createGroupsData[itemString] = L["Vendoring"].." - "..L["Buy"]
 	end
+	self._inQueryUpdate = false
 	self:_SetNumRows(#self._data.item)
 	self:Draw()
 end
