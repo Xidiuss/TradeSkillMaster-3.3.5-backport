@@ -804,17 +804,6 @@ end
 do
 	_G.SOUNDKIT = _G.SOUNDKIT or {}
 	_G.SOUNDKIT.ITEM_REPAIR = _G.SOUNDKIT.ITEM_REPAIR or "ITEM_REPAIR"
-	-- Guard PlaySound so a nil/!-found sound key can never abort a handler on this client
-	if not _G.__tsmPlaySoundGuarded and type(_G.PlaySound) == "function" then
-		local origPlaySound = _G.PlaySound
-		_G.PlaySound = function(sound, ...)
-			if sound == nil then
-				return
-			end
-			return pcall(origPlaySound, sound, ...)
-		end
-		_G.__tsmPlaySoundGuarded = true
-	end
 end
 
 -- ============================================================================
