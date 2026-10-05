@@ -9,6 +9,8 @@ if not TSMDEV then
 end
 TSMDEV.Tracing = {}
 local Tracing = TSMDEV.Tracing
+local LibTSMDev = select(2, ...).LibTSMDev
+local Log = LibTSMDev:From("LibTSMUtil"):Include("Util.Log")
 
 
 
@@ -17,12 +19,18 @@ local Tracing = TSMDEV.Tracing
 -- ============================================================================
 
 function Tracing.Enable(apiName)
-	C_AddOns.LoadAddOn("Blizzard_EventTrace")
 	local tableName, tableKey = strsplit(".", apiName)
 	if not tableKey then
-		tableName = nil
 		tableKey = tableName
+		tableName = nil
 	end
 	assert(tableKey)
-	hooksecurefunc(tableName and _G[tableName] or _G, tableKey, function(...) EventTrace:LogEvent(apiName, ...) end)
+	--! WotLK fix: Blizzard_EventTrace / EventTrace:LogEvent do not exist here.
+	hooksecurefunc(tableName and _G[tableName] or _G, tableKey, function(...)
+		local argStr = ""
+		for i = 1, select("#", ...) do
+			argStr = argStr..(i > 1 and ", " or "")..tostring((select(i, ...)))
+		end
+		Log.Info("%s(%s)", apiName, argStr)
+	end)
 end

@@ -555,7 +555,9 @@ end
 function private.DeleteEmptyMail(index)
 	local _, money, _, itemCount = Inbox.GetHeaderInfo(index)
 	-- Only force delete completely empty mails
-	if money == 0 and not itemCount then
+	--! WotLK fix: the adapter normalizes native nil to `numItems or 0`, and zero
+	--! is truthy in Lua, so `not itemCount` never held. Compare against zero.
+	if money == 0 and itemCount == 0 then
 		DeleteInboxItem(index)
 	end
 end

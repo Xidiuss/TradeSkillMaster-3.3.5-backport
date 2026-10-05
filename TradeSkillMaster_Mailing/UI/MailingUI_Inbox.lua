@@ -638,7 +638,9 @@ function private.UpdateInboxItemsFrame(frame)
 	local mailType = InboxAPI.GetMailType(private.selectedMail)
 	if mailType == InboxAPI.MAIL_TYPE.BUY.AUCTION then
 		local itemName, playerName, bid, buyout = InboxAPI.GetInvoiceInfo(private.selectedMail)
-		playerName = playerName or AUCTION_HOUSE_MAIL_MULTIPLE_SELLERS
+		--! WotLK fix: retail GlobalString absent on 3.3.5a (nil killed the frame
+		--! on concat); fall back to the native UNKNOWN instead.
+		playerName = playerName or UNKNOWN
 		local purchaseType = bid == buyout and BUYOUT or HIGH_BIDDER
 		body = strjoin(
 			"\n",
@@ -649,7 +651,9 @@ function private.UpdateInboxItemsFrame(frame)
 		)
 	elseif mailType == InboxAPI.MAIL_TYPE.SALE.AUCTION then
 		local itemName, playerName, bid, buyout, deposit, consignment = InboxAPI.GetInvoiceInfo(private.selectedMail)
-		playerName = playerName or AUCTION_HOUSE_MAIL_MULTIPLE_BUYERS
+		--! WotLK fix: retail GlobalString absent on 3.3.5a (nil killed the frame
+		--! on concat); fall back to the native UNKNOWN instead.
+		playerName = playerName or UNKNOWN
 		local purchaseType = bid == buyout and BUYOUT or HIGH_BIDDER
 		body = strjoin(
 			"\n",
@@ -664,7 +668,9 @@ function private.UpdateInboxItemsFrame(frame)
 		)
 	elseif mailType == InboxAPI.MAIL_TYPE.OTHER.TEMP_INVOICE then
 		local itemName, playerName, bid, buyout, deposit, consignment, etaHour, etaMin = InboxAPI.GetInvoiceInfo(private.selectedMail)
-		playerName = playerName or AUCTION_HOUSE_MAIL_MULTIPLE_BUYERS
+		--! WotLK fix: retail GlobalString absent on 3.3.5a (nil killed the frame
+		--! on concat); fall back to the native UNKNOWN instead.
+		playerName = playerName or UNKNOWN
 		local purchaseType = bid == buyout and BUYOUT or HIGH_BIDDER
 		body = strjoin(
 			"\n",

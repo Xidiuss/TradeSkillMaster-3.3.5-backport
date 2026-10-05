@@ -26,7 +26,8 @@ end
 ---@return boolean loaded
 ---@return boolean loadable
 function Addon.GetInfo(nameOrIndex)
-	local name, _, _, loadable = C_AddOns.GetAddOnInfo(nameOrIndex)
+	--! WotLK fix: the fourth return is enabled; loadable is the fifth.
+	local name, _, _, _, loadable = C_AddOns.GetAddOnInfo(nameOrIndex)
 	loadable = loadable and true or false
 	local version = strtrim(C_AddOns.GetAddOnMetadata(name, "X-Curse-Packaged-Version") or C_AddOns.GetAddOnMetadata(name, "Version") or "")
 	local loaded = C_AddOns.IsAddOnLoaded(nameOrIndex)

@@ -382,7 +382,7 @@ UIObject = {
 		SetTextToFit = function(Self, Text)
 			Self:SetWidth(0)
 			if ( Text ) then
-				Self:SetText(text)
+				Self:SetText(Text)
 			end
 		end,
 

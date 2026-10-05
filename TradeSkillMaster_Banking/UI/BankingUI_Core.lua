@@ -364,7 +364,8 @@ end
 function private.WarehousingDepositReagentsBtnOnClick()
 	if ClientInfo.IsRetail() then
 		C_Bank.AutoDepositItemsIntoBank(Enum.BankType.Character)
-	else
+	elseif DepositReagentBank then
+		--! WotLK fix: reagent bank API is absent on 3.3.5a.
 		DepositReagentBank()
 	end
 end

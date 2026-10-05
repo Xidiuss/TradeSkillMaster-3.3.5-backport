@@ -1086,8 +1086,21 @@ function AuctionScrollTable.__protected:_IsFirstSubRow(dataIndex)
 end
 
 function AuctionScrollTable.__private:_SetExpanded(dataIndex, expand)
-	local data = self._rawData[dataIndex]
 	local baseItemString = self._data.baseItemString[dataIndex]
+	if self._updateDataPending then
+		self:_FlushPendingUpdateData()
+		dataIndex = nil
+		for i, value in ipairs(self._data.baseItemString) do
+			if value == baseItemString then
+				dataIndex = i
+				break
+			end
+		end
+		if not dataIndex then
+			return
+		end
+	end
+	local data = self._rawData[dataIndex]
 	if (expand and true or false) == (self._expanded[baseItemString] and true or false) then
 		return
 	end

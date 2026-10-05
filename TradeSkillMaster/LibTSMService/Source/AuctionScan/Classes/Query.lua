@@ -872,10 +872,12 @@ function AuctionQuery:_IsFiltered(row, isSubRow, itemKey)
 		return true
 	end
 	-- luacheck: globals CanIMogIt
-	if self._unlearned and CanIMogIt:PlayerKnowsTransmog(ItemInfo.GetLink(baseItemString)) then
+	--! WotLK fix: CanIMogIt (transmog addon; no transmog on 3.3.5a) is never installed
+	--! here, so guard the call - an absent addon makes the filter inert.
+	if self._unlearned and CanIMogIt and CanIMogIt:PlayerKnowsTransmog(ItemInfo.GetLink(baseItemString)) then
 		return true
 	end
-	if self._canLearn and not CanIMogIt:CharacterCanLearnTransmog(ItemInfo.GetLink(baseItemString)) then
+	if self._canLearn and CanIMogIt and not CanIMogIt:CharacterCanLearnTransmog(ItemInfo.GetLink(baseItemString)) then
 		return true
 	end
 	if itemBuyout and (itemBuyout < self._minPrice or itemBuyout > self._maxPrice) then

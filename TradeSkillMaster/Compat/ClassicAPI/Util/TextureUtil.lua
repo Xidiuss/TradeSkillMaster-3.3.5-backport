@@ -83,28 +83,8 @@ function ClearClampedTextureRotation(texture)
 end
 
 
-function GetTexCoordsByGrid(xOffset, yOffset, textureWidth, textureHeight, gridWidth, gridHeight)
-    local widthPerGrid = gridWidth/textureWidth;
-    local heightPerGrid = gridHeight/textureHeight;
-    return (xOffset-1)*widthPerGrid, (xOffset)*widthPerGrid, (yOffset-1)*heightPerGrid, (yOffset)*heightPerGrid;
-end
-
-function GetTexCoordsForRole(role)
-    local textureHeight, textureWidth = 256, 256;
-    local roleHeight, roleWidth = 67, 67;
-
-    if ( role == "GUIDE" ) then
-        return GetTexCoordsByGrid(1, 1, textureWidth, textureHeight, roleWidth, roleHeight);
-    elseif ( role == "TANK" ) then
-        return GetTexCoordsByGrid(1, 2, textureWidth, textureHeight, roleWidth, roleHeight);
-    elseif ( role == "HEALER" ) then
-        return GetTexCoordsByGrid(2, 1, textureWidth, textureHeight, roleWidth, roleHeight);
-    elseif ( role == "DAMAGER" ) then
-        return GetTexCoordsByGrid(2, 2, textureWidth, textureHeight, roleWidth, roleHeight);
-    else
-        error("Unknown role: "..tostring(role));
-    end
-end
+--! WotLK fix: GetTexCoordsByGrid and GetTexCoordsForRole already exist in
+--! FrameXML on 3.3.5a. Do not replace globals owned by the client.
 
 function CreateTextureMarkup(file, fileWidth, fileHeight, width, height, left, right, top, bottom, xOffset, yOffset)
     return ("|T%s:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d|t"):format(

@@ -201,7 +201,10 @@ end
 ---@return string body
 ---@return boolean isTakeable
 function Inbox.GetText(index)
-	local body, _, _, isTakeable = GetInboxText(index)
+	--! WotLK fix: the third return is isTakeable, the fourth isInvoice
+	--! (bodyText, texture, isTakeable, isInvoice). Was reading the invoice
+	--! flag under the takeable name, inverting the Copy Letter button.
+	local body, _, isTakeable = GetInboxText(index)
 	return body, isTakeable
 end
 

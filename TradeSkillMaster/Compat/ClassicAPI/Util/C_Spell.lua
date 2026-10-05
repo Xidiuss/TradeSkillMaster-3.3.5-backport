@@ -92,7 +92,8 @@ function C_Spell.GetSpellIDForSpellIdentifier(ID, BookType)
 			local Link, _ = GetSpellLink(ID) or ID
 			Tooltip:SetHyperlink(Link)
 		end
-		_, _, ID = Tooltip:GetSpell()
+		--! WotLK fix: avoid writing to the global `_`; only the third return is needed.
+		ID = select(3, Tooltip:GetSpell())
 	end
 
 	return ID

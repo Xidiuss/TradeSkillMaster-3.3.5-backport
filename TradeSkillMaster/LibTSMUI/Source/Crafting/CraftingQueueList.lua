@@ -33,7 +33,6 @@ local EDIT_TEXTURE = "iconPack.12x12/Edit"
 local DELETE_TEXTURE = "iconPack.12x12/Close/Default"
 local ATTENTION_TEXTURE = "iconPack.12x12/Attention"
 local ICON_SIZE = Theme.GetItemIconSize
-local CONCENTRATION_ICON = "Interface\\ICONS\\UI_Concentration"
 
 
 
@@ -432,7 +431,9 @@ function CraftingQueueList.__private:_GetNameTooltip(dataIndex)
 	end
 	local concentration = RecipeString.GetConcentration(recipeString)
 	if concentration then
-		tinsert(tooltipLines, "|T"..CONCENTRATION_ICON..":0|t "..PROFESSIONS_CRAFTING_STAT_CONCENTRATION)
+		--! WotLK fix: the retail GlobalString and icon are absent on 3.3.5a.
+		local label = PROFESSIONS_CRAFTING_STAT_CONCENTRATION or "Concentration"
+		tinsert(tooltipLines, label)
 	end
 	local cooldown = Profession.GetRemainingCooldown(CraftString.FromRecipeString(recipeString))
 	if cooldown then

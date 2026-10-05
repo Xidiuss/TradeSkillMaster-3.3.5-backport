@@ -13,7 +13,6 @@ local Theme = TSM.LibTSMService:Include("UI.Theme")
 local TempTable = TSM.LibTSMUtil:Include("BaseType.TempTable")
 local CustomString = TSM.LibTSMTypes:Include("CustomString")
 local private = {}
-local CONCENTRATION_ICON = "Interface\\ICONS\\UI_Concentration"
 
 
 
@@ -106,7 +105,8 @@ function private.PopulateDetailedMatsLines(tooltip, itemString)
 		end
 	end
 	if (concentration or 0) > 0 then
-		tooltip:AddLine("|T"..CONCENTRATION_ICON..":0|t "..tooltip:ApplyValueColor(PROFESSIONS_CRAFTING_STAT_CONCENTRATION))
+		--! WotLK fix: the retail GlobalString and icon are absent on 3.3.5a.
+		tooltip:AddLine(tooltip:ApplyValueColor(PROFESSIONS_CRAFTING_STAT_CONCENTRATION or "Concentration"))
 	end
 	TempTable.Release(hasOptionalMat)
 	TempTable.Release(optionalMats)

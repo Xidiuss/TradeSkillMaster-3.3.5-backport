@@ -10,7 +10,8 @@ local C_Container = C_Container or {}
 local Tooltip = Private.Tooltip
 
 function C_Container.GetContainerItemInfo(ContainerIndex, SlotIndex)
-	local Icon, Stack, Locked, Quality, Readable = GetContainerItemInfo(ContainerIndex, SlotIndex)
+	--! WotLK fix: preserve the native sixth `lootable` return for container items.
+	local Icon, Stack, Locked, Quality, Readable, Lootable = GetContainerItemInfo(ContainerIndex, SlotIndex)
 
 	if ( Icon ) then
 		Tooltip:ClearLines()
@@ -23,7 +24,7 @@ function C_Container.GetContainerItemInfo(ContainerIndex, SlotIndex)
 			isLocked = Locked,
 			quality = Quality,
 			isReadable = Readable,
-			hasLoot = false,
+			hasLoot = Lootable and true or false,
 			hyperlink = C_Container.GetContainerItemLink(ContainerIndex, SlotIndex),
 			isFiltered = false,
 			hasNoValue = false,

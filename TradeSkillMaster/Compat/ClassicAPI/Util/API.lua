@@ -27,7 +27,9 @@ local FIRST_NUMBER_CAP = FIRST_NUMBER_CAP
 local SECOND_NUMBER_CAP = SECOND_NUMBER_CAP
 local LARGE_NUMBER_SEPERATOR = LARGE_NUMBER_SEPERATOR
 
-function AnimateTexCoords(Self, Width, Height, FrameW, FrameH, NumFrames, Elapsed, Throttle)
+--! WotLK fix: keep the optimized copy private instead of replacing Blizzard's
+--! live AnimateTexCoords global for the entire UI.
+function Private.AnimateTexCoords(Self, Width, Height, FrameW, FrameH, NumFrames, Elapsed, Throttle)
 	-- This exists, we just optimize it.
 	Throttle = Throttle or 0.1
 

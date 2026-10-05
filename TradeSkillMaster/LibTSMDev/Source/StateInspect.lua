@@ -18,6 +18,7 @@ local State = LibTSMDev:From("LibTSMUtil"):Include("Reactive.Type.State")
 StateInspect:OnModuleLoad(function()
 	SlashCommands.RegisterDebug("state", function()
 		C_AddOns.LoadAddOn("Blizzard_DebugTools")
-		DisplayTableInspectorWindow(State.GetDebugData())
+		--! WotLK fix: 3.3.5a DebugTools has DevTools_Dump, but no table inspector.
+		DevTools_Dump(State.GetDebugData())
 	end)
 end)

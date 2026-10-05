@@ -24,7 +24,6 @@ local private = {
 local ROW_HEIGHT = Theme.GetListRowHeight
 local ICON_SIZE = Theme.GetItemIconSize
 local ICON_SPACING = 4
-local CONCENTRATION_ICON = "Interface\\ICONS\\UI_Concentration"
 
 
 
@@ -121,8 +120,13 @@ function CraftingMatList:SetRecipeString(recipeString)
 		local concentration = RecipeString.GetConcentration(recipeString)
 		if concentration then
 			tinsert(self._itemString, "")
-			tinsert(self._text, PROFESSIONS_CRAFTING_STAT_CONCENTRATION)
-			tinsert(self._icon, CONCENTRATION_ICON)
+			--! WotLK fix: PROFESSIONS_CRAFTING_STAT_CONCENTRATION is a retail
+			--! GlobalString (nil here), and tinsert(t, nil) silently keeps #t under
+			--! Lua 5.1 - _text ended up shorter than the parallel tables and every
+			--! later row drew mismatched names/quantities. The icon is absent from
+			--! the client MPQs; use the unknown-item texture fallback instead.
+			tinsert(self._text, PROFESSIONS_CRAFTING_STAT_CONCENTRATION or "Concentration")
+			tinsert(self._icon, ItemInfo.GetTexture(ItemString.GetUnknown()))
 			-- TODO: display concentration amount
 			tinsert(self._quantity, 0)
 			tinsert(self._playerQuantity, 0)

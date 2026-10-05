@@ -86,7 +86,11 @@ function C_Item.IsLocked(ItemLocation)
 	local EquipmentSlotIndex, Locked, _ = ItemLocation.equipmentSlotIndex
 
 	if ( EquipmentSlotIndex ) then
-		Locked = IsInventoryItemLocked(EquipmentSlotIndex) ~= nil
+		--! WotLK fix: both native sources answer with the 1nil type, so normalize
+		--! to boolean exactly once, at the return. Normalizing here as well made
+		--! the return compare a boolean against nil, and `false ~= nil` is true:
+		--! every existing item answered "locked".
+		Locked = IsInventoryItemLocked(EquipmentSlotIndex)
 	else
 		_, _, Locked = GetContainerItemInfo(ItemLocation.bagID, ItemLocation.slotIndex)
 	end
@@ -128,8 +132,15 @@ function C_Item.GetItemQuality(ItemLocation)
 end
 
 function C_Item.GetItemInventoryType(ItemLocation)
-	local EquipmentSlotIndex = ItemLocation.equipmentSlotIndex
-	return EquipmentSlotIndex and Enum.__InventoryTypeInfo[EquipmentSlotIndex or 0]
+	--! WotLK fix: Enum.__InventoryTypeInfo is keyed by inventory TYPE (0..34) and holds
+	--! a localized caption, while equipmentSlotIndex is a character SLOT (1..19). The
+	--! retail function this mirrors answers with the enum number, so resolve the link
+	--! and reuse the by-ID path; that also fixes the bag branch, which answered nil.
+	local Link = C_Item.GetItemLink(ItemLocation)
+	if ( not Link ) then
+		return nil
+	end
+	return C_Item.GetItemInventoryTypeByID(Link)
 end
 
 function C_Item.GetCurrentItemLevel(ItemLocation)

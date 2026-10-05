@@ -144,7 +144,9 @@ function ShoppingPostDialogPriceView:Acquire()
 		:SetManager(self._childManager)
 		:AddChild(UIElements.New("Text", "desc")
 			:SetFont("BODY_BODY2")
-			:SetText((ClientInfo.HasFeature(ClientInfo.FEATURES.AH_STACKS) and AUCTION_STACK_SIZE or AUCTION_HOUSE_QUANTITY_LABEL)..":")
+			--! WotLK fix: AH_STACKS is always enabled here and the retail alternative
+			--! GlobalString does not exist on 3.3.5a.
+			:SetText(AUCTION_STACK_SIZE..":")
 		)
 		:AddChild(UIElements.New("Input", "input")
 			:SetWidth(62)

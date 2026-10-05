@@ -71,7 +71,7 @@ local function ActionButton_HideOverlayGlow(self)
 end
 
 local function ActionButton_OverlayGlowOnUpdate(self, elapsed)
-	AnimateTexCoords(self.ants, 256, 256, 48, 48, 22, elapsed, 0.01)
+	Private.AnimateTexCoords(self.ants, 256, 256, 48, 48, 22, elapsed, 0.01)
 
 	--[[ Tsoukie: This doesn't exist on 3.3.5.
 	local cooldown = self:GetParent().cooldown 

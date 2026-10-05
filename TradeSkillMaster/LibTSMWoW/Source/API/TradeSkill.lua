@@ -195,16 +195,10 @@ function TradeSkill.IsMidnightRecipe(spellId)
 end
 
 ---Returns whether or not the current trade skill is classic crafting.
+--! WotLK fix: the Craft API was removed before 3.3.5a. Always select the
+--! TradeSkill API rather than treating a closed profession window as Craft.
 function TradeSkill.IsClassicCrafting()
-	if ClientInfo.HasFeature(ClientInfo.FEATURES.C_TRADE_SKILL_UI) then
-		return false
-	end
-	local name, _, maxLevel = GetTradeSkillLine()
-	if name == "UNKNOWN" or maxLevel == 0 then
-		return true
-	else
-		return false
-	end
+	return false
 end
 
 ---Gets the name of the player who linked the current trade skill (for TYPE.LINKED).
@@ -231,8 +225,8 @@ end
 function TradeSkill.GetLink()
 	if not ClientInfo.HasFeature(ClientInfo.FEATURES.C_TRADE_SKILL_UI) then
 		-- 3.3.5 fix: the native GetTradeSkillListLink() global exists on WotLK
-		-- clients (except for classic crafting professions like Enchanting), so use
-		-- it instead of always returning nil (which broke profession link features)
+		-- clients, so use it instead of always returning nil (which broke
+		-- profession link features). Enchanting is a normal trade skill on 3.3.5a.
 		if TradeSkill.IsClassicCrafting() or not GetTradeSkillListLink then
 			return nil
 		end
@@ -368,9 +362,7 @@ end
 ---@param index number The index of the craft
 function TradeSkill.SelectCraft(index)
 	if TradeSkill.IsClassicCrafting() then
-		-- On 3.3.5, classic crafting (Enchanting) doesn't have SelectCraft function
-		-- Recipe selection happens through UI interaction, not API
-		-- This is a no-op for compatibility
+		-- Unreachable on 3.3.5a; kept as the shape of the compatibility branch.
 		return
 	else
 		SelectTradeSkill(index)
