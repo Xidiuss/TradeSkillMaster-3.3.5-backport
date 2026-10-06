@@ -43,11 +43,13 @@ local MAIL_TYPE = EnumType.NewNested("MAIL_TYPE", {
 Inbox.MAIL_TYPE = MAIL_TYPE
 local EXPIRED_MATCH_TEXT = gsub(AUCTION_EXPIRED_MAIL_SUBJECT, "%%s", "")
 local CANCELLED_MATCH_TEXT = gsub(AUCTION_REMOVED_MAIL_SUBJECT, "%%s", "")
-local OUTBID_MATCH_TEXT = gsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "(.+)")
+local OUTBID_MATCH_TEXT = gsub(AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "")
 -- 3.3.5 fix: pattern to detect sale mails by subject when the server doesn't
 -- provide invoice data (GetInboxInvoiceInfo returning nil is common on 3.3.5a
 -- private cores); also used to extract the item name from the subject
 local SOLD_MATCH_PATTERN = String.FormatToMatchPattern(AUCTION_SOLD_MAIL_SUBJECT)
+local WON_MATCH_TEXT = type(AUCTION_WON_MAIL_SUBJECT) == "string" and gsub(AUCTION_WON_MAIL_SUBJECT, "%%s", "") or nil
+local WON_MATCH_PATTERN = WON_MATCH_TEXT and WON_MATCH_TEXT ~= "" and String.FormatToMatchPattern(AUCTION_WON_MAIL_SUBJECT) or nil
 
 
 
@@ -125,6 +127,18 @@ end
 ---@param index index The mail index
 ---@return EnumValue
 function Inbox.GetMailType(index)
+	-- Some 3.3.5 private cores expose inconsistent invoice data over the lifetime
+	-- of a mail. Prefer the explicit localized auction subject on classic so a
+	-- sold mail can't later be reclassified as bought by a transient buyer invoice.
+	if not ClientInfo.HasFeature(ClientInfo.FEATURES.C_AUCTION_HOUSE) then
+		local _, headerMoney, _, _, headerSubject = Inbox.GetHeaderInfo(index)
+		if headerSubject and headerMoney > 0 and strmatch(headerSubject, SOLD_MATCH_PATTERN) then
+			return MAIL_TYPE.SALE.AUCTION
+		elseif WON_MATCH_PATTERN and headerSubject and strmatch(headerSubject, WON_MATCH_PATTERN) then
+			return MAIL_TYPE.BUY.AUCTION
+		end
+	end
+
 	-- Check if this is auction sale / buy mail
 	local invoiceType = GetInboxInvoiceInfo(index)
 	if invoiceType == "seller" then
@@ -173,15 +187,17 @@ function Inbox.GetMailType(index)
 	-- 3.3.5/locale fix: use plain-text find for the cancelled/expired subjects; the
 	-- localized Blizzard strings can contain Lua pattern magic characters (e.g. "-")
 	-- which would corrupt pattern-based matching on non-English clients
-	if strfind(subject, CANCELLED_MATCH_TEXT, 1, true) then
+	if WON_MATCH_PATTERN and subject and strmatch(subject, WON_MATCH_PATTERN) then
+		return MAIL_TYPE.BUY.AUCTION
+	elseif subject and CANCELLED_MATCH_TEXT ~= "" and strfind(subject, CANCELLED_MATCH_TEXT, 1, true) then
 		if money > 0 then
 			return MAIL_TYPE.CANCEL.BID
 		else
 			return MAIL_TYPE.CANCEL.AUCTION
 		end
-	elseif strfind(subject, EXPIRED_MATCH_TEXT, 1, true) then
+	elseif subject and EXPIRED_MATCH_TEXT ~= "" and strfind(subject, EXPIRED_MATCH_TEXT, 1, true) then
 		return MAIL_TYPE.EXPIRE.AUCTION
-	elseif strfind(subject, OUTBID_MATCH_TEXT) then
+	elseif subject and OUTBID_MATCH_TEXT ~= "" and strfind(subject, OUTBID_MATCH_TEXT, 1, true) then
 		return MAIL_TYPE.OTHER.OUTBID
 	end
 

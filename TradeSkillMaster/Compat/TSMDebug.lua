@@ -11,6 +11,8 @@ local function noop() end
 
 local DB_VERSION = 1
 local currentPriceLogRun = nil
+local MAIL_TRACE_VERSION = 1
+local MAIL_TRACE_MAX_ENTRIES = 400
 
 local DB_GLOBAL_BY_SCAN_TYPE = {
 	POST = "TSMPostScanLogDB",
@@ -156,6 +158,137 @@ local function GetMissingPriceLogModules()
 	return #missing > 0 and table.concat(missing, ", ") or nil
 end
 
+local function MailTraceDatabase()
+	local database = _G.TSMMailDebugDB
+	if type(database) ~= "table" or database.version ~= MAIL_TRACE_VERSION or type(database.entries) ~= "table" then
+		database = {
+			version = MAIL_TRACE_VERSION,
+			enabled = false,
+			nextSequence = 1,
+			entries = {},
+		}
+		_G.TSMMailDebugDB = database
+	end
+	database.nextSequence = tonumber(database.nextSequence) or (#database.entries + 1)
+	if database.enabled == nil then
+		database.enabled = false
+	end
+	return database
+end
+
+local function MailTraceEncode(value)
+	local ok, result = pcall(tostring, value)
+	if not ok then
+		result = "<tostring error>"
+	end
+	result = result
+		:gsub("\\", "\\\\")
+		:gsub("|", "\\p")
+		:gsub("\r", "\\r")
+		:gsub("\n", "\\n")
+	return result
+end
+
+local function MailTrace(event, fields)
+	local database = MailTraceDatabase()
+	if not database.enabled then
+		return
+	end
+	local now = type(GetTime) == "function" and GetTime() or time()
+	local parts = {
+		tostring(database.nextSequence),
+		MailTraceEncode(now),
+		MailTraceEncode(event),
+	}
+	database.nextSequence = database.nextSequence + 1
+	if type(fields) == "table" then
+		local keys = {}
+		for key in pairs(fields) do
+			table.insert(keys, key)
+		end
+		table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+		for _, key in ipairs(keys) do
+			table.insert(parts, MailTraceEncode(key).."="..MailTraceEncode(fields[key]))
+		end
+	end
+	table.insert(database.entries, table.concat(parts, "|"))
+	if #database.entries > MAIL_TRACE_MAX_ENTRIES then
+		table.remove(database.entries, 1)
+	end
+end
+
+local function MailTraceReset()
+	_G.TSMMailDebugDB = {
+		version = MAIL_TRACE_VERSION,
+		enabled = true,
+		nextSequence = 1,
+		entries = {},
+	}
+end
+
+local function MailTraceSetEnabled(enabled)
+	MailTraceDatabase().enabled = enabled and true or false
+end
+
+local function GetMailTrace()
+	return MailTraceDatabase().entries
+end
+
+local mailTraceHooks = {}
+
+local function InstallMailTraceHooks()
+	if type(_G.AutoLootMailItem) == "function" and not mailTraceHooks.AutoLootMailItem then
+		mailTraceHooks.AutoLootMailItem = _G.AutoLootMailItem
+		_G.AutoLootMailItem = function(index, ...)
+			MailTrace("WOW_API_AUTOLOOT", { index = index })
+			return mailTraceHooks.AutoLootMailItem(index, ...)
+		end
+	end
+	if type(_G.TakeInboxItem) == "function" and not mailTraceHooks.TakeInboxItem then
+		mailTraceHooks.TakeInboxItem = _G.TakeInboxItem
+		_G.TakeInboxItem = function(index, subIndex, ...)
+			MailTrace("WOW_API_TAKE_ITEM", { index = index, subIndex = subIndex })
+			return mailTraceHooks.TakeInboxItem(index, subIndex, ...)
+		end
+	end
+	if type(_G.TakeInboxMoney) == "function" and not mailTraceHooks.TakeInboxMoney then
+		mailTraceHooks.TakeInboxMoney = _G.TakeInboxMoney
+		_G.TakeInboxMoney = function(index, ...)
+			MailTrace("WOW_API_TAKE_MONEY", { index = index })
+			return mailTraceHooks.TakeInboxMoney(index, ...)
+		end
+	end
+end
+
+local function MailTraceCommand(message)
+	local command, argument = tostring(message or ""):match("^%s*(%S*)%s*(.-)%s*$")
+	command = command:lower()
+	if command == "reset" or command == "start" then
+		MailTraceReset()
+		print("TSM mail debug: zapis rozpoczęty, log wyczyszczony.")
+	elseif command == "stop" then
+		MailTraceSetEnabled(false)
+		print("TSM mail debug: zapis zatrzymany.")
+	else
+		local entries = GetMailTrace()
+		local limit = tonumber(argument)
+		if command ~= "show" then
+			limit = tonumber(command)
+		end
+		limit = math.max(1, math.min(limit or 80, MAIL_TRACE_MAX_ENTRIES))
+		local first = math.max(1, #entries - limit + 1)
+		print("TSM mail debug: "..#entries.." wpisów; pokazuję "..(#entries - first + 1)..".")
+		for index = first, #entries do
+			print(entries[index])
+		end
+	end
+end
+
+_G.SlashCmdList = _G.SlashCmdList or {}
+_G.SLASH_TSMMAILDEBUG1 = "/tsmmaildebug"
+_G.SlashCmdList.TSMMAILDEBUG = MailTraceCommand
+InstallMailTraceHooks()
+
 _G.TSMDBG = {
 	Log = noop,
 	Warn = noop,
@@ -174,4 +307,9 @@ _G.TSMDBG = {
 	PriceLogTrace = PriceLogTrace,
 	PriceLogEnd = PriceLogEnd,
 	GetMissingPriceLogModules = GetMissingPriceLogModules,
+	MailTrace = MailTrace,
+	MailTraceReset = MailTraceReset,
+	MailTraceSetEnabled = MailTraceSetEnabled,
+	GetMailTrace = GetMailTrace,
+	InstallMailTraceHooks = InstallMailTraceHooks,
 }

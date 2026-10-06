@@ -20,6 +20,7 @@ local Mail = TSM.LibTSMService:Include("Mail")
 local UIElements = TSM.LibTSMUI:Include("Util.UIElements")
 local UIUtils = TSM.LibTSMUI:Include("Util.UIUtils")
 local InboxAPI = TSM.LibTSMWoW:Include("API.Inbox")
+local MailTrace = _G.TSMDBG and _G.TSMDBG.MailTrace or function() end
 local private = {
 	settings = nil,
 	fsm = nil,
@@ -194,7 +195,7 @@ function private.GetInboxMailsFrame()
 			:AddChild(UIElements.New("ActionButton", "openAllMail")
 				:SetHeight(26)
 				:SetText(L["Open All Mail"])
-				:SetScript("OnClick", private.OpenBtnOnClick)
+				:SetScript("OnClick", private.OpenAllBtnOnClick)
 				:SetModifierText(L["Open Mail"], "SHIFT")
 				:SetModifierText(L["Open All Mail Without Money"], "CTRL")
 				:SetModifierText(L["Open Mail Without Money"], "SHIFT", "CTRL")
@@ -209,7 +210,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["All Sold"])
 					:SetContext(InboxAPI.MAIL_TYPE.SALE)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenSalesBtnOnClick)
 					:SetModifierText(L["Sold"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to not continue after the inbox refreshes"])
 				)
@@ -218,7 +219,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["All Bought"])
 					:SetContext(InboxAPI.MAIL_TYPE.BUY)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenBuysBtnOnClick)
 					:SetModifierText(L["Bought"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to not continue after the inbox refreshes"])
 				)
@@ -227,7 +228,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["All Cancelled"])
 					:SetContext(InboxAPI.MAIL_TYPE.CANCEL)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenCancelsBtnOnClick)
 					:SetModifierText(L["Cancelled"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to not continue after the inbox refreshes"])
 				)
@@ -236,7 +237,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["All Expired"])
 					:SetContext(InboxAPI.MAIL_TYPE.EXPIRE)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenExpiresBtnOnClick)
 					:SetModifierText(L["Expired"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to not continue after the inbox refreshes"])
 				)
@@ -244,7 +245,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["All Other"])
 					:SetContext(InboxAPI.MAIL_TYPE.OTHER)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenOthersBtnOnClick)
 					:SetModifierText(L["Other"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to not continue after the inbox refreshes"])
 				)
@@ -259,7 +260,7 @@ function private.GetInboxMailsFrame()
 			:AddChild(UIElements.New("ActionButton", "openAllMail")
 				:SetHeight(26)
 				:SetText(L["Open Mail"])
-				:SetScript("OnClick", private.OpenBtnOnClick)
+				:SetScript("OnClick", private.OpenAllBtnOnClick)
 				:SetModifierText(L["Open All Mail"], "SHIFT")
 				:SetModifierText(L["Open Mail Without Money"], "CTRL")
 				:SetModifierText(L["Open All Mail Without Money"], "SHIFT", "CTRL")
@@ -274,7 +275,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["Sold"])
 					:SetContext(InboxAPI.MAIL_TYPE.SALE)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenSalesBtnOnClick)
 					:SetModifierText(L["All Sold"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to continue after the inbox refreshes"])
 				)
@@ -283,7 +284,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["Bought"])
 					:SetContext(InboxAPI.MAIL_TYPE.BUY)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenBuysBtnOnClick)
 					:SetModifierText(L["All Bought"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to continue after the inbox refreshes"])
 				)
@@ -292,7 +293,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["Cancelled"])
 					:SetContext(InboxAPI.MAIL_TYPE.CANCEL)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenCancelsBtnOnClick)
 					:SetModifierText(L["All Cancelled"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to continue after the inbox refreshes"])
 				)
@@ -301,7 +302,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["Expired"])
 					:SetContext(InboxAPI.MAIL_TYPE.EXPIRE)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenExpiresBtnOnClick)
 					:SetModifierText(L["All Expired"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to continue after the inbox refreshes"])
 				)
@@ -309,7 +310,7 @@ function private.GetInboxMailsFrame()
 					:SetFont("BODY_BODY2")
 					:SetText(L["Other"])
 					:SetContext(InboxAPI.MAIL_TYPE.OTHER)
-					:SetScript("OnClick", private.OpenBtnOnClick)
+					:SetScript("OnClick", private.OpenOthersBtnOnClick)
 					:SetModifierText(L["All Other"], "SHIFT")
 					:SetTooltip(L["Hold SHIFT to continue after the inbox refreshes"])
 				)
@@ -553,6 +554,7 @@ end
 function private.AutoLootMailItem(button)
 	-- Marks the mail as read
 	InboxAPI.GetText(private.selectedMail)
+	MailTrace("UI_DIRECT_SELECTED", { index = private.selectedMail })
 	AutoLootMailItem(private.selectedMail)
 	button:GetElement("__parent.__parent.__parent.__parent.__parent"):SetPath("mails", true)
 end
@@ -795,8 +797,7 @@ function private.InboxOnMailScanComplete()
 	private.fsm:ProcessEvent("EV_MAIL_DATA_UPDATED", private.filterText or "")
 end
 
-function private.OpenBtnOnClick(button)
-	local filterType = button:GetContext()
+function private.OpenBtnOnClick(button, filterType)
 	button:SetPressed(true)
 	-- 3.3.5: IsShiftKeyDown()/IsControlKeyDown() return 1/nil - normalize to
 	-- explicit booleans, otherwise a nil hole truncates FSM TempTable varargs
@@ -811,7 +812,38 @@ function private.OpenBtnOnClick(button)
 	end
 	local keepMoney = (not filterType and ctrlDown) or false
 	local filterText = private.filterText or ""
+	MailTrace("UI_CLICK", {
+		filter = filterType,
+		filterText = filterText,
+		isRetail = ClientInfo.IsRetail(),
+		keepMoney = keepMoney,
+		openAll = openAll,
+	})
 	private.fsm:ProcessEvent("EV_BUTTON_CLICKED", openAll, keepMoney, filterText, filterType)
+end
+
+function private.OpenAllBtnOnClick(button)
+	private.OpenBtnOnClick(button, nil)
+end
+
+function private.OpenSalesBtnOnClick(button)
+	private.OpenBtnOnClick(button, InboxAPI.MAIL_TYPE.SALE)
+end
+
+function private.OpenBuysBtnOnClick(button)
+	private.OpenBtnOnClick(button, InboxAPI.MAIL_TYPE.BUY)
+end
+
+function private.OpenCancelsBtnOnClick(button)
+	private.OpenBtnOnClick(button, InboxAPI.MAIL_TYPE.CANCEL)
+end
+
+function private.OpenExpiresBtnOnClick(button)
+	private.OpenBtnOnClick(button, InboxAPI.MAIL_TYPE.EXPIRE)
+end
+
+function private.OpenOthersBtnOnClick(button)
+	private.OpenBtnOnClick(button, InboxAPI.MAIL_TYPE.OTHER)
 end
 
 function private.MailsOnRowClick(scrollTable, index)
@@ -820,6 +852,7 @@ function private.MailsOnRowClick(scrollTable, index)
 		if cod <= 0 then
 			-- Marks the mail as read
 			InboxAPI.GetText(index)
+			MailTrace("UI_DIRECT_ROW", { cod = cod, index = index })
 			AutoLootMailItem(index)
 		end
 	else
@@ -1025,6 +1058,12 @@ function private.FSMCreate()
 			:SetOnEnter(function(context, autoRefresh, keepMoney, filterText, filterType)
 				context.opening = true
 				UpdateButtons(context)
+				MailTrace("UI_FSM_START", {
+					autoRefresh = autoRefresh,
+					filter = filterType,
+					filterText = filterText,
+					keepMoney = keepMoney,
+				})
 				TSM.Mailing.Open.StartOpening(private.FSMOpenCallback, autoRefresh, keepMoney, filterText, filterType)
 			end)
 			:SetOnExit(function(context)
@@ -1043,6 +1082,7 @@ function private.FSMCreate()
 end
 
 function private.FSMOpenCallback()
+	MailTrace("UI_FSM_DONE", {})
 	private.fsm:ProcessEvent("EV_OPENING_DONE")
 
 	SoundAlert.Play(private.settings.openMailSound)

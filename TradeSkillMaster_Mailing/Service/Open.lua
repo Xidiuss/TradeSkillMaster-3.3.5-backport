@@ -7,6 +7,7 @@
 local TSM = _G.TSMAddon ---@type TSM
 local Open = TSM.Mailing:NewPackage("Open") ---@type AddonPackage
 local ClientInfo = TSM.LibTSMWoW:Include("Util.ClientInfo")
+local Event = TSM.LibTSMWoW:Include("Service.Event")
 local L = TSM.Locale.GetTable()
 local DelayTimer = TSM.LibTSMWoW:IncludeClassType("DelayTimer")
 local TempTable = TSM.LibTSMUtil:Include("BaseType.TempTable")
@@ -18,6 +19,7 @@ local DefaultUI = TSM.LibTSMWoW:Include("UI.DefaultUI")
 local Threading = TSM.LibTSMTypes:Include("Threading")
 local Inbox = TSM.LibTSMWoW:Include("API.Inbox")
 local Mail = TSM.LibTSMService:Include("Mail")
+local MailTrace = _G.TSMDBG and _G.TSMDBG.MailTrace or function() end
 local private = {
 	settings = nil,
 	thread = nil,
@@ -65,6 +67,13 @@ function Open.OnInitialize(settingsDB)
 	private.thread = Threading.New("MAIL_OPENING", private.OpenMailThread)
 	private.checkInboxTimer = DelayTimer.New("MAILING_OPEN_CHECK_INBOX", private.CheckInbox)
 	DefaultUI.RegisterMailVisibleCallback(private.FrameVisibleCallback)
+	Event.Register("UI_ERROR_MESSAGE", private.TraceMailError)
+end
+
+function private.TraceMailError(event, message)
+	if private.isOpening then
+		MailTrace("OPEN_UI_ERROR", { event = event, message = message })
+	end
 end
 
 function Open.KillThread()
@@ -76,6 +85,13 @@ end
 
 function Open.StartOpening(callback, autoRefresh, keepMoney, filterText, filterType)
 	Threading.Kill(private.thread)
+	MailTrace("OPEN_START", {
+		autoRefresh = autoRefresh,
+		filter = filterType,
+		filterText = filterText,
+		isClassic = IS_CLASSIC,
+		keepMoney = keepMoney,
+	})
 
 	private.isOpening = true
 	private.moneyCollected = 0
@@ -161,6 +177,13 @@ end
 -- Теперь пейсинг задаёт само подтверждение изъятия, без длинных пауз.
 function private.OpenMailThreadClassic(autoRefresh, keepMoney, filterText, filterType)
 	filterText = strlower(filterText or "")
+	MailTrace("OPEN_THREAD_CLASSIC", {
+		autoRefresh = autoRefresh,
+		filter = filterType,
+		filterText = filterText,
+		keepMoney = keepMoney,
+	})
+	local abortOpening = false
 	-- Внешний цикл по «пачкам»: клиент 3.3.5 держит в инбоксе максимум ~50 писем, остальные сервер
 	-- отдаёт только после ~60с рефреша. Пока держали SHIFT (autoRefresh) и на сервере есть ещё не
 	-- подгруженные письма — ждём рефреш и продолжаем сбор, иначе останавливаемся как раньше.
@@ -173,16 +196,57 @@ function private.OpenMailThreadClassic(autoRefresh, keepMoney, filterText, filte
 			local numLeft = Inbox.GetNumItems()
 			-- Нисходящий обход безопасен при удалении: изъятое письмо сдвигает только большие индексы,
 			-- которые мы уже прошли; ещё не обработанные меньшие индексы не смещаются (как в Postal).
-			for index = numLeft, 1, -1 do
+			local index, lastNumLeft = numLeft, numLeft
+			while index > 0 do
 				Threading.WaitForFunction(private.CanOpenMail)
-				if private.OpenSingleMailClassic(index, keepMoney, filterText, filterType) then
+				if autoRefresh then
+					local currentNumLeft = Inbox.GetNumItems()
+					if currentNumLeft > lastNumLeft then
+						index = currentNumLeft
+						MailTrace("OPEN_REFILL_REBASE", { index = index, previousNumLeft = lastNumLeft })
+					end
+					lastNumLeft = currentNumLeft
+				end
+				local result = private.OpenSingleMailClassic(index, keepMoney, filterText, filterType)
+				if result == nil then
+					-- The server did not confirm this exact request. Continuing would queue the
+					-- same numeric index again and could loot a different mail after the inbox shifts.
+					MailTrace("OPEN_STOP", { reason = "REQUEST_UNCONFIRMED", index = index })
+					abortOpening = true
+					break
+				elseif result then
 					tookAny = true
 					tookAnyThisBatch = true
+					if autoRefresh then
+						local beforeRefill, total = Inbox.GetNumItems()
+						lastNumLeft = beforeRefill
+						if total > beforeRefill then
+							-- Let removal and a fast hidden-mail refill finish before another command.
+							-- A refill invalidates the descending cursor; start from the live last row.
+							Threading.Sleep(CLASSIC_MAIL_RESCAN_SETTLE)
+							local afterRefill = Inbox.GetNumItems()
+							if afterRefill > beforeRefill then
+								index = afterRefill + 1
+								MailTrace("OPEN_REFILL_REBASE", { index = afterRefill, previousNumLeft = beforeRefill })
+							end
+							lastNumLeft = afterRefill
+						end
+					end
 				end
+				index = index - 1
+			end
+			if abortOpening then
+				break
 			end
 			passCount = passCount + 1
 
-			local _, numTotal = Inbox.GetNumItems()
+			local remaining, numTotal = Inbox.GetNumItems()
+			MailTrace("OPEN_PASS_RESULT", {
+				pass = passCount,
+				numLeft = remaining,
+				numTotal = numTotal,
+				tookAny = tookAny,
+			})
 			-- Повторяем проход, только пока реально что-то собираем и остаются письма (со страховочным
 			-- лимитом MAX_OPEN_PASSES от зацикливания).
 			if not (tookAny and numTotal > 0 and passCount < MAX_OPEN_PASSES) then
@@ -191,16 +255,26 @@ function private.OpenMailThreadClassic(autoRefresh, keepMoney, filterText, filte
 			CheckInbox()
 			Threading.Sleep(CLASSIC_MAIL_RESCAN_SETTLE)
 		end
+		if abortOpening then
+			break
+		end
 
 		-- Продолжаем на следующую пачку только для «Open All» (autoRefresh) и когда сервер сообщает,
 		-- что писем всего больше, чем сейчас загружено в инбокс (numTotal > numLeft).
 		local numLeft, numTotal = Inbox.GetNumItems()
 		if not (autoRefresh and tookAnyThisBatch and numTotal > numLeft) then
+			MailTrace("OPEN_STOP", {
+				reason = not autoRefresh and "NO_AUTO_REFRESH" or not tookAnyThisBatch and "NO_PROGRESS" or "NO_HIDDEN_MAIL",
+				numLeft = numLeft,
+				numTotal = numTotal,
+				pass = passCount,
+			})
 			break
 		end
 		-- Ждём подгрузки следующей пачки (окно рефреша ~MAIL_REFRESH_TIME). Если новая пачка так и не
 		-- пришла в отведённое окно — останавливаемся.
 		if not private.WaitForInboxRefresh(numLeft) then
+			MailTrace("OPEN_STOP", { reason = "REFRESH_TIMEOUT", numLeft = numLeft })
 			break
 		end
 	end
@@ -214,6 +288,7 @@ end
 -- относительно prevNumLeft. Обновляет private.lastCheck на момент реального запроса, чтобы счётчик
 -- «Reload UI (NN)» в UI отсчитывал именно это окно ожидания. Возвращает true, если пачка пришла.
 function private.WaitForInboxRefresh(prevNumLeft)
+	MailTrace("OPEN_REFRESH_WAIT", { numLeft = prevNumLeft })
 	CheckInbox()
 	private.lastCheck = time()
 	-- Синхронизируем UI-счётчик «Reload UI (NN)» со стартом реального окна рефреша.
@@ -223,6 +298,7 @@ function private.WaitForInboxRefresh(prevNumLeft)
 	while GetTime() < deadline do
 		Threading.Sleep(CLASSIC_MAIL_RESCAN_SETTLE)
 		if Inbox.GetNumItems() > prevNumLeft then
+			MailTrace("OPEN_REFRESH_READY", { previousNumLeft = prevNumLeft })
 			return true
 		end
 		-- Первый CheckInbox сервер мог «проглотить» из-за троттла — периодически повторяем запрос.
@@ -236,15 +312,19 @@ function private.WaitForInboxRefresh(prevNumLeft)
 	return false
 end
 
--- 3.3.5/Warmane: собирает ОДНО письмо и ограниченно ждёт подтверждения изъятия. Возвращает true,
--- если письмо было взято (нужно для решения о ещё одном проходе).
+-- 3.3.5/Warmane: processes one mail and waits for confirmation tied to that mail.
+-- Returns true when confirmed, false when skipped, and nil when the request times out.
 function private.OpenSingleMailClassic(index, keepMoney, filterText, filterType)
 	local mailType = Inbox.GetMailType(index)
-	if filterType then
-		if mailType ~= filterType then
-			return false
-		end
-	elseif not mailType then
+	local matchesFilter = private.MailMatchesFilter(mailType, filterType)
+	MailTrace("OPEN_CLASSIFY", {
+		filter = filterType,
+		index = index,
+		mailType = mailType,
+		matches = matchesFilter,
+		path = "CLASSIC",
+	})
+	if not matchesFilter then
 		return false
 	end
 	if filterText ~= "" and not private.MatchesFilterText(index, filterText) then
@@ -256,7 +336,7 @@ function private.OpenSingleMailClassic(index, keepMoney, filterText, filterType)
 		return false
 	end
 
-	local _, money, cod, numItems, _, _, textCreated = Inbox.GetHeaderInfo(index)
+	local sender, money, cod, numItems, subject, daysLeft, textCreated = Inbox.GetHeaderInfo(index)
 	if cod ~= 0 then
 		return false
 	end
@@ -270,20 +350,42 @@ function private.OpenSingleMailClassic(index, keepMoney, filterText, filterType)
 	end
 
 	local message = private.settings.inboxMessages and private.GetOpenMailMessage(index) or nil
+	local traceSnapshot
+	if _G.TSMMailDebugDB and _G.TSMMailDebugDB.enabled then
+		local itemLink = GetInboxItemLink(index, 1)
+		local numLeft, numTotal = Inbox.GetNumItems()
+		traceSnapshot = {
+			itemLink = itemLink,
+			bagCount = itemLink and type(GetItemCount) == "function" and GetItemCount(itemLink) or nil,
+			numLeft = numLeft,
+			numTotal = numTotal,
+			daysLeft = daysLeft,
+			freeSlots = private.GetTotalFreeBagSlots(),
+		}
+	end
 	-- Отмечаем письмо прочитанным
 	Inbox.GetText(index)
-	-- Снимок инбокса ДО изъятия — по нему ждём реальное изменение.
-	local preTakeLeft, preTakeTotal = Inbox.GetNumItems()
+	MailTrace("OPEN_REQUEST", {
+		cod = cod,
+		filter = filterType,
+		index = index,
+		itemCount = numItems,
+		mailType = mailType,
+		money = money,
+		sender = sender,
+		subject = subject,
+	})
 	AutoLootMailItem(index)
 	private.lastMailAction = GetTime()
-	private.moneyCollected = private.moneyCollected + money
 
-	-- Ограниченное по времени подтверждение изъятия (аналог ожидания MAIL_INBOX_UPDATE в TSM 2.8 и
-	-- опроса дельты «предметы/золото» в Postal): выходим сразу при изменении инбокса, но не дольше
-	-- CLASSIC_MAIL_CONFIRM_TIMEOUT, чтобы не обгонять сервер (иначе он «глотает» частые запросы и
-	-- письма пропускаются) и при этом не зависать.
+	-- Wait for this specific mail to disappear or lose money / attachments. A global inbox
+	-- count change is not sufficient because an unrelated delivery may change it.
 	local deadline = GetTime() + CLASSIC_MAIL_CONFIRM_TIMEOUT
-	local _, changed = Threading.WaitForFunction(private.MailActionConfirmed, deadline, index, preTakeLeft, preTakeTotal)
+	local _, changed = Threading.WaitForFunction(private.MailActionConfirmed, deadline, index, sender, money, cod, numItems, subject, traceSnapshot)
+	if not changed then
+		return nil
+	end
+	private.moneyCollected = private.moneyCollected + money
 	if message then
 		ChatMessage.PrintUser(message)
 	end
@@ -333,22 +435,70 @@ function private.GetTotalFreeBagSlots()
 	return total
 end
 
--- 3.3.5/Warmane: предикат ограниченного по времени ожидания подтверждения изъятия письма.
--- Возвращает (true, true) при реальном и��менении инбокса и (true, false) по истечении дедлайна.
-function private.MailActionConfirmed(deadline, index, prevLeft, prevTotal)
+-- 3.3.5/Warmane: bounded confirmation for one exact mail request. Returns (true, true)
+-- when the target changes and (true, false) when the deadline expires unchanged.
+function private.MailActionConfirmed(deadline, index, prevSender, prevMoney, prevCod, prevNumItems, prevSubject, traceSnapshot)
+	local sender, money, cod, numItems, subject, daysLeft = Inbox.GetHeaderInfo(index)
+	-- Confirm only a change to the mail that was targeted. A global inbox-count
+	-- change may be an unrelated delivery and must never authorize another request.
+	if sender ~= prevSender or subject ~= prevSubject then
+		MailTrace("OPEN_CONFIRM", {
+			index = index,
+			newSender = sender,
+			newSubject = subject,
+			prevSender = prevSender,
+			prevSubject = prevSubject,
+			reason = "IDENTITY_CHANGED",
+		})
+		return true, true
+	end
+	money = money or 0
+	cod = cod or 0
+	numItems = numItems or 0
+	if money < prevMoney or cod < prevCod or numItems < prevNumItems then
+		MailTrace("OPEN_CONFIRM", {
+			cod = cod,
+			index = index,
+			itemCount = numItems,
+			money = money,
+			reason = "CONTENTS_CHANGED",
+			subject = subject,
+		})
+		return true, true
+	end
 	if GetTime() >= deadline then
+		if traceSnapshot then
+			local numLeft, numTotal = Inbox.GetNumItems()
+			MailTrace("OPEN_TIMEOUT_CONTEXT", {
+				index = index,
+				itemLink = traceSnapshot.itemLink,
+				prevBagCount = traceSnapshot.bagCount,
+				bagCount = traceSnapshot.itemLink and type(GetItemCount) == "function" and GetItemCount(traceSnapshot.itemLink) or nil,
+				prevNumLeft = traceSnapshot.numLeft,
+				prevNumTotal = traceSnapshot.numTotal,
+				numLeft = numLeft,
+				numTotal = numTotal,
+				prevDaysLeft = traceSnapshot.daysLeft,
+				daysLeft = daysLeft,
+				prevFreeSlots = traceSnapshot.freeSlots,
+				freeSlots = private.GetTotalFreeBagSlots(),
+			})
+		end
+		MailTrace("OPEN_CONFIRM", {
+			index = index,
+			reason = "TIMEOUT",
+			subject = subject,
+			sender = sender,
+			money = money,
+			cod = cod,
+			itemCount = numItems,
+			prevSender = prevSender,
+			prevSubject = prevSubject,
+			prevMoney = prevMoney,
+			prevCod = prevCod,
+			prevItemCount = prevNumItems,
+		})
 		return true, false
-	end
-	local left, total = Inbox.GetNumItems()
-	if left ~= prevLeft or total ~= prevTotal then
-		return true, true
-	end
-	-- Письмо могло не удалиться сервером сразу (остаётся прочитанным пустым) — тогда общий
-	-- счётчик не меняется. Подтверждаем по факту: у самого письма больше нет золота/вложений
-	-- (срабатывает сразу после изъятия, не дожидаясь удаления последнего письма).
-	local _, money, _, numItems = Inbox.GetHeaderInfo(index)
-	if money <= 0 and numItems <= 0 then
-		return true, true
 	end
 	return false
 end
@@ -360,16 +510,31 @@ function private.OpenMails(mails, keepMoney, filterType)
 		Threading.WaitForFunction(private.CanOpenMail)
 
 		local mailType = Inbox.GetMailType(index)
-		local matchesFilter = (not filterType and mailType) or (filterType == mailType)
+		local matchesFilter = private.MailMatchesFilter(mailType, filterType)
+		MailTrace("OPEN_CLASSIFY", {
+			filter = filterType,
+			index = index,
+			mailType = mailType,
+			matches = matchesFilter,
+			path = "RETAIL",
+		})
 		local hasBagSpace = not Mail.GetInboxItemLink(index) or private.GetTotalFreeBagSlots() > private.settings.keepMailSpace
 		if matchesFilter and hasBagSpace then
-			local _, money, cod, numItems, _, _, textCreated = Inbox.GetHeaderInfo(index)
+			local sender, money, cod, numItems, subject, _, textCreated = Inbox.GetHeaderInfo(index)
 			if cod == 0 and (not keepMoney or (keepMoney and money <= 0)) then
 				local message = private.settings.inboxMessages and private.GetOpenMailMessage(index) or nil
 				-- Marks the mail as read
 				Inbox.GetText(index)
-				-- 3.3.5/Warmane: снимок инбокса ДО изъятия — по нему затем ждём реальное изменение.
-				local preTakeLeft, preTakeTotal = Inbox.GetNumItems()
+				MailTrace("OPEN_REQUEST", {
+					cod = cod,
+					filter = filterType,
+					index = index,
+					itemCount = numItems,
+					mailType = mailType,
+					money = money,
+					sender = sender,
+					subject = subject,
+				})
 				AutoLootMailItem(index)
 				private.lastMailAction = GetTime()
 				private.moneyCollected = private.moneyCollected + money
@@ -401,7 +566,7 @@ function private.OpenMails(mails, keepMoney, filterType)
 						-- звать до фактического изъятия (иначе можно удалить непустое письмо), поэтому
 						-- здесь ждём реального изъятия, но не дольше CLASSIC_MAIL_CONFIRM_TIMEOUT.
 						local deadline = GetTime() + CLASSIC_MAIL_CONFIRM_TIMEOUT
-						local _, changed = Threading.WaitForFunction(private.MailActionConfirmed, deadline, index, preTakeLeft, preTakeTotal)
+						local _, changed = Threading.WaitForFunction(private.MailActionConfirmed, deadline, index, sender, money, cod, numItems, subject)
 						if changed then
 							if message then
 								ChatMessage.PrintUser(message)
@@ -430,6 +595,13 @@ end
 -- ============================================================================
 -- Private Helper Functions
 -- ============================================================================
+
+function private.MailMatchesFilter(mailType, filterType)
+	if not mailType then
+		return false
+	end
+	return not filterType or mailType == filterType
+end
 
 function private.FrameVisibleCallback(visible)
 	if visible then
@@ -555,8 +727,7 @@ end
 function private.DeleteEmptyMail(index)
 	local _, money, _, itemCount = Inbox.GetHeaderInfo(index)
 	-- Only force delete completely empty mails
-	--! WotLK fix: the adapter normalizes native nil to `numItems or 0`, and zero
-	--! is truthy in Lua, so `not itemCount` never held. Compare against zero.
+	--! WotLK fix: Inbox normalizes an empty attachment count to numeric zero.
 	if money == 0 and itemCount == 0 then
 		DeleteInboxItem(index)
 	end

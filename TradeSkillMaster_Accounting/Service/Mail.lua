@@ -10,7 +10,6 @@ local ClientInfo = TSM.LibTSMWoW:Include("Util.ClientInfo")
 local DelayTimer = TSM.LibTSMWoW:IncludeClassType("DelayTimer")
 local String = TSM.LibTSMUtil:Include("Lua.String")
 local ItemString = TSM.LibTSMTypes:Include("Item.ItemString")
-local Vararg = TSM.LibTSMUtil:Include("Lua.Vararg")
 local Container = TSM.LibTSMWoW:Include("API.Container")
 local Log = TSM.LibTSMUtil:Include("Util.Log")
 local DefaultUI = TSM.LibTSMWoW:Include("UI.DefaultUI")
@@ -19,6 +18,7 @@ local Auction = TSM.LibTSMService:Include("Auction")
 local BagTracking = TSM.LibTSMService:Include("Inventory.BagTracking")
 local TooltipScanning = TSM.LibTSMWoW:Include("Service.TooltipScanning")
 local Inbox = TSM.LibTSMWoW:Include("API.Inbox")
+local MailTrace = _G.TSMDBG and _G.TSMDBG.MailTrace or function() end
 local private = {
 	hooks = {},
 	sellersTimer = nil,
@@ -137,18 +137,94 @@ function private.CanLootMailIndex(index, copper)
 end
 
 -- Scans the mail that the player just attempted to collected (Pre-Hook)
-function private.ScanCollectedMail(oFunc, attempt, index, subIndex)
-	local _, _, _, _, subject, _, _, _, _, texture = Inbox.GetHeaderInfo(index)
+function private.ScanCollectedMail(oFunc, attempt, index, subIndex, expectedSender, expectedMoney, expectedCodAmount, expectedItemCount, expectedSubject)
+	local sender, money, codAmount, itemCount, subject, _, _, _, _, texture = Inbox.GetHeaderInfo(index)
+	MailTrace("ACCOUNTING_SCAN", {
+		attempt = attempt,
+		cod = codAmount,
+		index = index,
+		itemCount = itemCount,
+		money = money,
+		oFunc = oFunc,
+		sender = sender,
+		subIndex = subIndex,
+		subject = subject,
+		texture = texture,
+	})
 	if not subject then
+		MailTrace("ACCOUNTING_DROP", { attempt = attempt, index = index, oFunc = oFunc, reason = "NO_SUBJECT" })
+		return
+	end
+	if attempt == 1 then
+		-- Only one delayed collection may exist at a time. A new user action supersedes
+		-- an older retry which still contains a numeric inbox index.
+		if private.rescanContext.oFunc then
+			MailTrace("ACCOUNTING_CANCEL_OLD", {
+				index = private.rescanContext.index,
+				oFunc = private.rescanContext.oFunc,
+				subject = private.rescanContext.subject,
+			})
+		end
+		private.rescanTimer:Cancel()
+		wipe(private.rescanContext)
+		expectedSender = sender
+		expectedMoney = money
+		expectedCodAmount = codAmount
+		expectedItemCount = itemCount
+		expectedSubject = subject
+	elseif sender ~= expectedSender or money ~= expectedMoney or codAmount ~= expectedCodAmount or itemCount ~= expectedItemCount or subject ~= expectedSubject then
+		-- Inbox indices are not stable while the server refreshes the inbox. Never let
+		-- a delayed retry act on a different message which moved into this index.
+		MailTrace("ACCOUNTING_DROP", {
+			attempt = attempt,
+			expectedSender = expectedSender,
+			expectedSubject = expectedSubject,
+			index = index,
+			oFunc = oFunc,
+			reason = "IDENTITY_CHANGED",
+			sender = sender,
+			subject = subject,
+		})
+		wipe(private.rescanContext)
 		return
 	end
 	local success, shouldRetry = private.RecordMail(index, subIndex, attempt <= 2)
+	MailTrace("ACCOUNTING_RESULT", {
+		attempt = attempt,
+		index = index,
+		oFunc = oFunc,
+		shouldRetry = shouldRetry,
+		subject = subject,
+		success = success,
+	})
 	if not success and attempt <= 5 and (not texture or shouldRetry) then
 		-- Try again
 		wipe(private.rescanContext)
-		Vararg.IntoTable(private.rescanContext, oFunc, attempt + 1, index, subIndex)
+		private.rescanContext.oFunc = oFunc
+		private.rescanContext.attempt = attempt + 1
+		private.rescanContext.index = index
+		private.rescanContext.subIndex = subIndex
+		private.rescanContext.sender = expectedSender
+		private.rescanContext.money = expectedMoney
+		private.rescanContext.codAmount = expectedCodAmount
+		private.rescanContext.itemCount = expectedItemCount
+		private.rescanContext.subject = expectedSubject
+		MailTrace("ACCOUNTING_RETRY", {
+			index = index,
+			nextAttempt = attempt + 1,
+			oFunc = oFunc,
+			subject = expectedSubject,
+		})
 		private.rescanTimer:RunForTime(0.2)
 	else
+		wipe(private.rescanContext)
+		MailTrace("ACCOUNTING_NATIVE", {
+			attempt = attempt,
+			index = index,
+			oFunc = oFunc,
+			subIndex = subIndex,
+			subject = subject,
+		})
 		private.hooks[oFunc](index, subIndex)
 	end
 end
@@ -156,6 +232,13 @@ end
 function private.RecordMail(index, subIndex, resolveNames)
 	local mailType = Inbox.GetMailType(index)
 	local sender, money, codAmount, _, subject, daysLeft = Inbox.GetHeaderInfo(index)
+	MailTrace("ACCOUNTING_CLASSIFY", {
+		index = index,
+		mailType = mailType,
+		resolveNames = resolveNames,
+		sender = sender,
+		subject = subject,
+	})
 	sender = (sender and sender ~= "") and sender or "?"
 	if mailType == Inbox.MAIL_TYPE.SALE.AUCTION then
 		local itemName, buyer, bid, _, _, ahcut, _, _, quantity = Inbox.GetInvoiceInfo(index)
@@ -373,7 +456,8 @@ function private.ValidateAuctionItemMail(index, subIndex)
 end
 
 function private.RescanHandler()
-	private.ScanCollectedMail(unpack(private.rescanContext))
+	local context = private.rescanContext
+	private.ScanCollectedMail(context.oFunc, context.attempt, context.index, context.subIndex, context.sender, context.money, context.codAmount, context.itemCount, context.subject)
 end
 
 
