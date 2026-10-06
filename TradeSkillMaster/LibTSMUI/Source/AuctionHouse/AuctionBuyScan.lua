@@ -782,7 +782,7 @@ function AuctionBuyScan.__private:_ActionHandler(manager, state, action, ...)
 				if LibTSMUI.IsVanillaClassic() or LibTSMUI.IsBCClassic() or LibTSMUI.IsWrathClassic() then
 					-- On 3.3.5a, PlaceAuctionBid is protected and CANNOT be called asynchronously from a thread callback.
 					-- Now that findResult is cached, notify user to click Buyout again in their hardware event.
-					ChatMessage.PrintfUser("已在拍卖行定位该物品，请再次点击【一口价/购买】。")
+					ChatMessage.PrintfUser("Auction located. Click Buyout / Buy again to complete the purchase.")
 					if self._resumeAfterFind then
 						self._resumeAfterFind = false
 						manager:ProcessAction("ACTION_RESUME_SCAN")
@@ -793,7 +793,7 @@ function AuctionBuyScan.__private:_ActionHandler(manager, state, action, ...)
 			elseif state.pendingBidOnFind then
 				state.pendingBidOnFind = false
 				if LibTSMUI.IsVanillaClassic() or LibTSMUI.IsBCClassic() or LibTSMUI.IsWrathClassic() then
-					ChatMessage.PrintfUser("已在拍卖行定位该物品，请再次点击【竞标】。")
+					ChatMessage.PrintfUser("Auction located. Click Bid again to place your bid.")
 					if self._resumeAfterFind then
 						self._resumeAfterFind = false
 						manager:ProcessAction("ACTION_RESUME_SCAN")

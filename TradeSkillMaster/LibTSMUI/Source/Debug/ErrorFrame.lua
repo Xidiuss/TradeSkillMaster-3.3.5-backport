@@ -86,7 +86,7 @@ function ErrorFrame.__private:__init()
 	text:SetTextColor(0.9, 0.9, 0.9, 1)
 	text:SetJustifyH("LEFT")
 	text:SetJustifyV("MIDDLE")
-	text:SetText("TradeSkillMaster encountered an error. Click the text box and press Ctrl+C / Cmd+C to copy it:")
+	text:SetText("TradeSkillMaster error report. Click the text box and press Ctrl+C / Cmd+C to copy it:")
 
 	local switchBtn = CreateFrame("Button", nil, frame)
 	frame.switchBtn = switchBtn
@@ -134,7 +134,7 @@ function ErrorFrame.__private:__init()
 	reloadBtn:SetPoint("BOTTOMLEFT", 8, 6)
 	reloadBtn:SetWidth(120)
 	reloadBtn:SetHeight(28)
-	reloadBtn:SetText(RELOADUI)
+	reloadBtn:SetText(RELOADUI or "Reload UI")
 	reloadBtn:SetScript("OnClick", self:__closure("_HandleReloadClick"))
 
 	local selectBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -181,7 +181,7 @@ function ErrorFrame:Show(errorStr, errorInfo, fullErrorInfo, isManual)
 	self._details = errorStr
 	local frame = self._frame
 	frame:Show()
-	frame.text:SetText("TradeSkillMaster encountered an error. Click the text box and press Ctrl+C / Cmd+C to copy it:")
+	frame.text:SetText("TradeSkillMaster error report. Click the text box and press Ctrl+C / Cmd+C to copy it:")
 	frame.fullBtn:Show()
 	frame.stepsText:Hide()
 	frame.editBox:SetText(errorStr)

@@ -126,7 +126,7 @@ end
 -- Error Handler
 -- ============================================================================
 
-function private.ErrorHandler(msg, thread, isSilent, isManual)
+function private.ErrorHandler(msg, thread, isSilent, isManual, capturedError)
 	-- Ignore errors while we are handling this error
 	private.ignoreErrors = true
 
@@ -154,9 +154,18 @@ function private.ErrorHandler(msg, thread, isSilent, isManual)
 	end)
 
 	-- Build stack trace with locals and get addon name
-	local stackInfo, newMsg = private.GetStackInfo(msg, thread)
+	local stackInfo, newMsg
+	if capturedError and type(capturedError.stack) == "string" and capturedError.stack ~= "" then
+		-- BugGrabber already captured the failing stack; the live stack belongs to its callback.
+		stackInfo, newMsg = {}, msg
+	else
+		stackInfo, newMsg = private.GetStackInfo(msg, thread)
+	end
 	msg = newMsg
 	local addonName = (isSilent or _G.TSM_GLOBAL_DEBUG) and "TradeSkillMaster" or nil
+	if capturedError and not addonName then
+		addonName = private.IsTSMAddon(msg) or private.IsTSMAddon(capturedError.stack)
+	end
 	for _, info in ipairs(stackInfo) do
 		if not addonName then
 			addonName = (strmatch(info.file, "[A-Za-z0-9_]+%.lua") and private.IsTSMAddon(info.file)) or nil
@@ -265,6 +274,14 @@ function private.ErrorHandler(msg, thread, isSilent, isManual)
 		tinsert(stackInfoLines, locationStr.." <"..info.func..">"..localsStr)
 	end
 
+	local stackStr = table.concat(stackInfoLines, "\n")
+	if capturedError and type(capturedError.stack) == "string" and capturedError.stack ~= "" then
+		stackStr = capturedError.stack
+		if type(capturedError.locals) == "string" and capturedError.locals ~= "" then
+			stackStr = stackStr.."\nLocals:\n"..capturedError.locals
+		end
+	end
+
 	-- Build the error string
 	local errorStr = strjoin("\n",
 		private.FormatErrorMessageSection("Message", msg),
@@ -273,7 +290,7 @@ function private.ErrorHandler(msg, thread, isSilent, isManual)
 		private.FormatErrorMessageSection("Locale", errorInfo.locale),
 		private.FormatErrorMessageSection("Combat", errorInfo.inCombat),
 		private.FormatErrorMessageSection("Error Count", private.num),
-		private.FormatErrorMessageSection("Stack Trace", table.concat(stackInfoLines, "\n"), true),
+		private.FormatErrorMessageSection("Stack Trace", stackStr, true),
 		private.FormatErrorMessageSection("Temp Tables", errorInfo.tempTableStr, true),
 		private.FormatErrorMessageSection("Object Pools", errorInfo.objectPoolStr, true),
 		private.FormatErrorMessageSection("Running Threads", errorInfo.threadInfoStr, true),
@@ -584,7 +601,10 @@ end
 -- ============================================================================
 
 do
-	local function ErrorHandlerFunc(errMsg)
+	local function ErrorHandlerFunc(errMsg, capturedError)
+		if type(errMsg) == "table" then
+			errMsg = type(errMsg.message) == "string" and errMsg.message or errMsg[1] or errMsg
+		end
 		local tsmErrMsg = strtrim(tostring(errMsg))
 		if private.ignoreErrors then
 			-- we're ignoring errors
@@ -599,13 +619,17 @@ do
 		if tsmErrMsg then
 			-- look at the stack trace to see if this is a TSM error
 			local isTSM = false
-			for i = 2, MAX_STACK_DEPTH do
-				local stackLine = Debug.Stack(i, 1, 0)
-				if not strmatch(stackLine, "^%[C%]:") and not strmatch(stackLine, "[%(%[]tail call[%)%]]:") and not strmatch(stackLine, "%[tsm error check%]") and not strmatch(stackLine, "^%[string \"[^@]") and not strmatch(stackLine, "SharedXML") and not strmatch(stackLine, "CallbackHandler") and not strmatch(stackLine, "!BugGrabber") and not strmatch(stackLine, "ErrorHandler%.lua") then
-					if private.IsTSMAddon(stackLine) or _G.TSM_GLOBAL_DEBUG then
-						isTSM = true
+			if capturedError and type(capturedError.stack) == "string" and capturedError.stack ~= "" then
+				isTSM = private.IsTSMAddon(tsmErrMsg) or private.IsTSMAddon(capturedError.stack)
+			else
+				for i = 2, MAX_STACK_DEPTH do
+					local stackLine = Debug.Stack(i, 1, 0)
+					if not strmatch(stackLine, "^%[C%]:") and not strmatch(stackLine, "[%(%[]tail call[%)%]]:") and not strmatch(stackLine, "%[tsm error check%]") and not strmatch(stackLine, "^%[string \"[^@]") and not strmatch(stackLine, "SharedXML") and not strmatch(stackLine, "CallbackHandler") and not strmatch(stackLine, "!BugGrabber") and not strmatch(stackLine, "ErrorHandler%.lua") then
+						if private.IsTSMAddon(stackLine) or _G.TSM_GLOBAL_DEBUG then
+							isTSM = true
+						end
+						break
 					end
-					break
 				end
 			end
 			if not isTSM and not _G.TSM_GLOBAL_DEBUG then
@@ -613,7 +637,7 @@ do
 			end
 		end
 		if tsmErrMsg then
-			local status, ret = pcall(private.ErrorHandler, tsmErrMsg, nil, false, false)
+			local status, ret = pcall(private.ErrorHandler, tsmErrMsg, nil, false, false, capturedError)
 			if status and ret then
 				return ret
 			elseif not status and not private.hitInternalError then
@@ -627,7 +651,7 @@ do
 	-- luacheck: globals BugGrabber
 	if BugGrabber and BugGrabber.RegisterCallback then
 		BugGrabber.RegisterCallback({}, "BugGrabber_BugGrabbed", function(_, errObj)
-			ErrorHandlerFunc(errObj.message)
+			ErrorHandlerFunc(errObj.message, errObj)
 		end)
 	end
 	Event.Register("ADDON_ACTION_FORBIDDEN", private.AddonBlockedHandler)
