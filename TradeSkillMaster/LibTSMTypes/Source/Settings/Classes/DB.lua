@@ -595,7 +595,7 @@ function SettingsDB.__private:_AccessibleCharacterIteratorHelper(accountFilter, 
 	local result = TempTable.Acquire()
 	for scopeKey, ownerAccount in pairs(self._tbl._syncOwner) do
 		if not accountFilter or ownerAccount == accountFilter then
-			local character = strmatch(scopeKey, "^(.+)"..String.Escape(Types.SCOPE_KEY_SEP..factionrealm))
+			local character = strmatch(scopeKey, "^(.+)"..String.Escape(Types.SCOPE_KEY_SEP..factionrealm).."$")
 			if character and (not altsOnly or factionrealm ~= self._currentScopeKeys.factionrealm or strjoin(Types.SCOPE_KEY_SEP, character, realm) ~= self._currentScopeKeys.char) then
 				tinsert(result, character)
 			end

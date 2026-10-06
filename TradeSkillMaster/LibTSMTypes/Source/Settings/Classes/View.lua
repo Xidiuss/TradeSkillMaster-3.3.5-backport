@@ -166,7 +166,7 @@ function VIEW_METHODS:AccessibleValueIterator(key)
 				local factionrealm = strjoin(Types.SCOPE_KEY_SEP, faction, realm)
 				if scopeType == "sync" then
 					for scopeKey in pairs(context.settingsDB._tbl._syncOwner) do
-						local character = strmatch(scopeKey, "^(.+)"..String.Escape(Types.SCOPE_KEY_SEP..factionrealm))
+						local character = strmatch(scopeKey, "^(.+)"..String.Escape(Types.SCOPE_KEY_SEP..factionrealm).."$")
 						if character then
 							local value = context.settingsDB:Get(scopeType, scopeKey, namespace, key)
 							if value ~= nil then
